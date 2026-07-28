@@ -7,12 +7,13 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
 from app.llm import build_orchestrator
 from app.tesla.adapter import build_adapter
+from app.auth.oauth import get_authorize_url, exchange_code
 
 settings = get_settings()
 app = FastAPI(title="tesla-agent")
@@ -78,12 +79,15 @@ async def tesla_public_key() -> PlainTextResponse:
 
 
 @app.get("/auth/login")
-async def auth_login() -> dict[str, str]:
-    """TODO: build the Tesla authorize URL (with PKCE) and redirect the user."""
-    return {"todo": "construct authorize URL from app/auth/oauth.py and redirect"}
+async def auth_login() -> RedirectResponse:
+    url, _ = get_authorize_url()
+    return RedirectResponse(url)
 
 
 @app.get("/auth/callback")
-async def auth_callback(code: str | None = None) -> dict[str, str]:
-    """TODO: exchange `code` for tokens and persist them via TokenStore.save_tokens."""
-    return {"todo": "exchange code for tokens", "received_code": bool(code)}
+async def auth_callback(code: str, state: str) -> dict[str, str]:
+    try:
+        await exchange_code(code, state)
+        return {"status": "success", "message": "Tesla account linked successfully. You can close this window."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

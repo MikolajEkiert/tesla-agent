@@ -75,8 +75,26 @@ class FleetImpl:
             )
             r.raise_for_status()
             data = r.json()["response"]
-        # TODO: normalize to the same shape MockImpl returns so the AI sees one schema.
-        return data
+        charge_state = data.get("charge_state", {})
+        climate_state = data.get("climate_state", {})
+        vehicle_state = data.get("vehicle_state", {})
+        
+        normalized = {
+            "awake": data.get("state") == "online",
+            "battery_percent": charge_state.get("battery_level", 0),
+            "charge_limit_percent": charge_state.get("charge_limit_soc", 80),
+            "charging": charge_state.get("charging_state") == "Charging",
+            "locked": vehicle_state.get("locked", True),
+            "climate_on": climate_state.get("is_climate_on", False),
+            "inside_temp_c": climate_state.get("inside_temp", 0.0),
+            "target_temp_c": climate_state.get("driver_temp_setting", 21.0),
+            "seat_heaters": {
+                "front_left": climate_state.get("seat_heater_left", 0),
+                "front_right": climate_state.get("seat_heater_right", 0),
+            },
+            "media": {"playing": False, "volume": 5}, # Fleet API doesn't reliably expose media playback state in vehicle_data
+        }
+        return normalized
 
     # --- commands (all go through the signing proxy) ---
     async def set_temperature(self, celsius: float) -> dict[str, Any]:
