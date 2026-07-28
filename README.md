@@ -82,7 +82,31 @@ cp ../backend/.env.example ../backend/.env   # fill it in
 docker compose up -d --build
 ```
 
-## Next: the mobile app
+## Mobile app — Volt
 
-A React Native (Expo) client is just a chat UI that POSTs to `/chat` and keeps
-the returned `history` for context. Build it against this backend on mock first.
+`mobile/` is an Expo (React Native + TypeScript) chat client. Design language:
+an instrument cluster, not a messenger — a live telemetry strip up top
+(battery, lock, climate), and every tool call the backend executes renders as
+a colored instrument-log line in the conversation (`● CLIMATE → 22°C`), not
+hidden system chrome.
+
+```bash
+# with the backend running (see Quick start above)
+cd mobile
+npm install
+npm start        # press i for iOS Simulator, w for web, a for Android
+```
+
+Networking defaults: iOS Simulator reaches `localhost:8000` directly (it
+shares the host Mac's network). Android emulator needs `10.0.2.2` instead —
+already handled in `src/api.ts`. A physical device needs your Mac's LAN IP;
+set `EXPO_PUBLIC_API_URL` to override.
+
+| Path | Role |
+|---|---|
+| `mobile/App.tsx` | Loads fonts (Space Grotesk / Manrope / JetBrains Mono), renders the app |
+| `mobile/src/theme.ts` | Design tokens — colors, type, spacing |
+| `mobile/src/screens/ChatScreen.tsx` | Message list + input, talks to the backend |
+| `mobile/src/components/InstrumentStrip.tsx` | Live telemetry readout |
+| `mobile/src/components/ToolLogLine.tsx` | Renders one tool call as a log entry |
+| `mobile/src/toolMeta.ts` | Maps each backend tool to its vehicle system + color — keep in sync with `backend/app/tools.py` |

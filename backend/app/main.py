@@ -56,6 +56,12 @@ async def chat(req: ChatRequest) -> ChatResponse:
     return ChatResponse(**result)
 
 
+@app.get("/vehicle/state")
+async def vehicle_state() -> dict[str, Any]:
+    """Direct read, no LLM involved — cheap enough to poll for a live UI strip."""
+    return await adapter.get_state()
+
+
 # --- Tesla-required routes (only relevant once you go live on the fleet adapter) ---
 
 @app.get("/.well-known/appspecific/com.tesla.3p.public-key.pem")
