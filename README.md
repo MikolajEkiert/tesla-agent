@@ -21,9 +21,12 @@ React Native app  ──HTTPS──▶  FastAPI backend  ──▶  TeslaAdapter
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env          # then put your ANTHROPIC_API_KEY in .env
+cp .env.example .env          # then put your GEMINI_API_KEY in .env
 uvicorn app.main:app --reload
 ```
+
+Get a free Gemini key at <https://aistudio.google.com/apikey>. To use Claude
+instead, set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` in `.env`.
 
 Talk to it:
 
@@ -40,8 +43,8 @@ The mock car's state changes as you issue commands, so multi-turn requests like
 | Path | Role |
 |---|---|
 | `backend/app/main.py` | FastAPI: `/chat`, `/health`, Tesla's `/.well-known/...` and `/auth/*` |
-| `backend/app/orchestrator.py` | Claude tool-calling loop (the AI layer) |
-| `backend/app/tools.py` | Tool schemas + dispatch to the adapter |
+| `backend/app/llm/` | LLM provider seam: `gemini_llm.py` (default), `anthropic_llm.py` (fallback) |
+| `backend/app/tools.py` | Provider-agnostic tool schemas + dispatch to the adapter |
 | `backend/app/tesla/adapter.py` | `TeslaAdapter` interface + factory (the swap seam) |
 | `backend/app/tesla/mock.py` | In-memory fake car (default) |
 | `backend/app/tesla/fleet.py` | Real Fleet API impl — **stub**, finish last |

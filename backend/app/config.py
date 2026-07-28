@@ -10,7 +10,14 @@ load_dotenv()
 
 
 class Settings:
-    # LLM
+    # LLM provider: "gemini" (default) or "anthropic"
+    llm_provider: str = os.getenv("LLM_PROVIDER", "gemini").lower()
+
+    # Google Gemini (default)
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+    # Anthropic (fallback provider)
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-opus-5")
 

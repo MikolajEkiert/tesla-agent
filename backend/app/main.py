@@ -11,7 +11,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
-from app.orchestrator import Orchestrator
+from app.llm import build_orchestrator
 from app.tesla.adapter import build_adapter
 
 settings = get_settings()
@@ -27,7 +27,7 @@ app.add_middleware(
 # One adapter + orchestrator for the process. The mock adapter holds state in
 # memory; the fleet adapter is stateless per request beyond cached tokens.
 adapter = build_adapter()
-orchestrator = Orchestrator(adapter)
+orchestrator = build_orchestrator(adapter)
 
 
 class ChatRequest(BaseModel):
@@ -43,7 +43,11 @@ class ChatResponse(BaseModel):
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "adapter": settings.tesla_adapter}
+    return {
+        "status": "ok",
+        "adapter": settings.tesla_adapter,
+        "llm": settings.llm_provider,
+    }
 
 
 @app.post("/chat", response_model=ChatResponse)
