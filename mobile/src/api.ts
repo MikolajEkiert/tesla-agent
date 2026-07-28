@@ -2,14 +2,10 @@ import { Platform } from "react-native";
 import type { ChatResponse, VehicleState } from "./types";
 
 /**
- * iOS Simulator shares the host Mac's network, so `localhost` reaches a
- * backend running on your machine directly. Android's emulator does not —
- * 10.0.2.2 is its alias for the host. A physical device needs your Mac's LAN
- * IP; override with EXPO_PUBLIC_API_URL in that case.
+ * The API url defaults to the production endpoint if EXPO_PUBLIC_API_URL is not set.
  */
 const DEFAULT_BASE_URL =
-  process.env.EXPO_PUBLIC_API_URL ??
-  (Platform.OS === "android" ? "http://10.0.2.2:8000" : "http://localhost:8000");
+  process.env.EXPO_PUBLIC_API_URL ?? "https://tesla-amp.duckdns.org";
 
 export async function sendMessage(
   message: string,

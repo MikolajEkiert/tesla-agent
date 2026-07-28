@@ -33,7 +33,7 @@ export function ChatInput({
         <TextInput
           value={text}
           onChangeText={setText}
-          placeholder="Ask Volt…"
+          placeholder="Ask Amp…"
           placeholderTextColor={color.textTertiary}
           style={styles.input}
           onFocus={() => setFocused(true)}

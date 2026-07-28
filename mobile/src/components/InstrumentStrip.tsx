@@ -20,7 +20,7 @@ export function InstrumentStrip({ state }: { state: VehicleState | null }) {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.brand}>VOLT</Text>
+      <Text style={styles.brand}>AMP</Text>
       <View style={styles.readings}>
         {battery != null && (
           <Reading dot={color.charge} label={`${Math.round(battery)}%`} />

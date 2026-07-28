@@ -1,5 +1,5 @@
 /**
- * Design tokens for Volt — an instrument-cluster read on a chat UI, not a
+ * Design tokens for Amp — an instrument-cluster read on a chat UI, not a
  * generic messenger. The car is dark inside; the palette follows that, and
  * function colors map to real vehicle systems rather than one brand accent.
  */

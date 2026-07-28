@@ -64,7 +64,7 @@ export function ChatScreen() {
         ]);
         refreshVehicle();
       } catch {
-        setError("Couldn't reach Volt's backend. Is it running?");
+        setError("Couldn't reach Amp's backend. Is it running?");
       } finally {
         setPending(false);
       }
