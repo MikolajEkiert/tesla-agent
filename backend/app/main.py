@@ -68,8 +68,14 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
 @app.get("/vehicle/state")
 async def vehicle_state() -> dict[str, Any]:
-    """Direct read, no LLM involved — cheap enough to poll for a live UI strip."""
-    return await adapter.get_state()
+    """Direct read, no LLM involved — cheap enough to poll for a live UI
+    strip. Never wakes the car (see FleetImpl.get_state) — a sleeping
+    vehicle is a normal response (awake: false + a cached snapshot), not an
+    error. This only catches genuine failures (auth, network)."""
+    try:
+        return await adapter.get_state()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 # --- Tesla-required routes (only relevant once you go live on the fleet adapter) ---

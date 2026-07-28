@@ -10,6 +10,7 @@ class MockImpl:
         # A tiny mutable "vehicle state" so commands visibly change reads.
         self._state: dict[str, Any] = {
             "awake": True,
+            "stale_seconds": 0,  # mock is always "live" — no real sleep/staleness concept
             "battery_percent": 72,
             "charge_limit_percent": 80,
             "charging": False,

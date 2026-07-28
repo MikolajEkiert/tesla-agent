@@ -12,6 +12,13 @@ function Reading({ dot, label }: { dot: string; label: string }) {
   );
 }
 
+function formatStaleness(seconds: number): string {
+  if (seconds < 60) return "just now";
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `${mins}m`;
+  return `${Math.round(mins / 60)}h`;
+}
+
 export function InstrumentStrip({
   state,
   onDisconnect,
@@ -20,6 +27,8 @@ export function InstrumentStrip({
   /** Omit to hide the disconnect affordance entirely (e.g. on the mock adapter). */
   onDisconnect?: () => void;
 }) {
+  const awake = state?.awake;
+  const staleSeconds = state?.stale_seconds;
   const battery = state?.battery_percent;
   const locked = state?.locked;
   const climateOn = state?.climate_on;
@@ -39,6 +48,12 @@ export function InstrumentStrip({
         <Text style={styles.brand}>AMP</Text>
       </Pressable>
       <View style={styles.readings}>
+        {awake === false && (
+          <Reading
+            dot={color.textTertiary}
+            label={staleSeconds != null ? `asleep · ${formatStaleness(staleSeconds)}` : "asleep"}
+          />
+        )}
         {battery != null && (
           <Reading dot={color.charge} label={`${Math.round(battery)}%`} />
         )}

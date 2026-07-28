@@ -13,6 +13,12 @@ export type ChatItem =
 
 export interface VehicleState {
   awake?: boolean;
+  /**
+   * Seconds since this snapshot was actually fetched from the car. 0 when
+   * live (awake), > 0 when serving a last-known snapshot while asleep,
+   * null if we've never observed the car awake since the backend started.
+   */
+  stale_seconds?: number | null;
   battery_percent?: number;
   charge_limit_percent?: number;
   charging?: boolean;
