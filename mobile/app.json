@@ -19,7 +19,12 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "themeColor": "#0C0E12",
+      "backgroundColor": "#0C0E12",
+      "display": "standalone",
+      "name": "Amp",
+      "shortName": "Amp"
     },
     "plugins": [
       "expo-font"

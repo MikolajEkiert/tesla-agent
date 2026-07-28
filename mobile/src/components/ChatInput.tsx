@@ -86,14 +86,17 @@ const styles = StyleSheet.create({
     color: color.textPrimary,
     maxHeight: 110,
     paddingVertical: space.xs,
-    // react-native-web renders a browser default focus ring on top of our
-    // own; the native TextInput on iOS/Android never shows one, so this is
-    // purely a web-preview correction.
+    // Belt-and-suspenders with the global reset in public/index.html (which
+    // also kills the tap-highlight rectangle mobile browsers draw on touch —
+    // that one can only be fixed globally, not via a RN style prop).
     ...(Platform.OS === "web" ? { outlineWidth: 0 } : {}),
   },
   sendButton: {
-    width: 34,
-    height: 34,
+    // 44x44 is the iOS/Android minimum comfortable tap target (was 34 —
+    // hitSlop covers native, but its web support is inconsistent, so size
+    // the box itself correctly instead of depending on it).
+    width: 44,
+    height: 44,
     borderRadius: radius.pill,
     backgroundColor: color.brand,
     alignItems: "center",
