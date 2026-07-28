@@ -15,7 +15,11 @@ class Settings:
 
     # Google Gemini (default)
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+    # gemini-3.5-flash-lite: free-tier daily quota is ~500 requests vs. only
+    # 20/day on gemini-3.6-flash (Google throttles free access to its newest
+    # models hardest). Plenty for a personal assistant; check your own exact
+    # limit at https://aistudio.google.com/rate-limit if you ever hit it.
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
     # Anthropic (fallback provider)
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
