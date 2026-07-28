@@ -1,0 +1,14 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+
+# Secrets & keys — never commit
+backend/.env
+backend/keys/
+deploy/keys/
+deploy/certs/
+
+# Caddy runtime
+deploy/caddy_data/
+deploy/caddy_config/

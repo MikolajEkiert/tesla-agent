@@ -1,0 +1,51 @@
+# Runs on your Oracle Cloud Always-Free VM. Three containers:
+#   api          - the FastAPI backend (AI chat + Tesla adapter)
+#   caddy        - reverse proxy with automatic Let's Encrypt TLS for your domain
+#   tesla-proxy  - Tesla's Go vehicle-command signing proxy (only needed for the
+#                  fleet adapter; harmless to leave running while on mock)
+#
+# For a $0 setup, point a free DuckDNS subdomain (e.g. volt.duckdns.org) at the
+# VM's public IP, then set DOMAIN below. Caddy gets a real cert automatically.
+
+services:
+  api:
+    build: ../backend
+    env_file: ../backend/.env
+    expose:
+      - "8000"
+    restart: unless-stopped
+    # For the fleet adapter, mount your generated keys:
+    # volumes:
+    #   - ./keys:/app/keys:ro
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # Tesla's official signing proxy. Uncomment when you switch to the fleet adapter.
+  # Build from https://github.com/teslamotors/vehicle-command (tesla-http-proxy),
+  # or use a prebuilt image. It signs commands with your enrolled virtual key.
+  # tesla-proxy:
+  #   image: tesla-http-proxy:latest
+  #   command: >
+  #     -tls-key /certs/proxy-key.pem -cert /certs/proxy-cert.pem
+  #     -key-file /keys/private-key.pem -port 4443 -verbose
+  #   volumes:
+  #     - ./keys:/keys:ro
+  #     - ./certs:/certs:ro
+  #   expose:
+  #     - "4443"
+  #   restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

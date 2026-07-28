@@ -1,0 +1,8 @@
+# Replace volt.duckdns.org with your own domain/subdomain.
+# Caddy automatically obtains and renews a Let's Encrypt certificate for it,
+# which satisfies Tesla's "domain registered with a certificate authority" rule.
+
+volt.duckdns.org {
+	# The FastAPI backend serves /chat, /health, /.well-known/..., and /auth/*
+	reverse_proxy api:8000
+}
