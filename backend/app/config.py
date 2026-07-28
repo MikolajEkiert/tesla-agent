@@ -38,6 +38,12 @@ class Settings:
         "TESLA_FLEET_BASE", "https://fleet-api.prd.eu.vn.cloud.tesla.com"
     )
 
+    # Open Charge Map — curated charger database used for lookups Tesla's own
+    # API can't answer (other networks, places away from the car). Free key
+    # from https://openchargemap.org/site/develop/api. Without it the app
+    # falls back to OpenStreetMap, which needs no key but is patchier.
+    ocm_api_key: str = os.getenv("OCM_API_KEY", "")
+
     # App
     cors_origins: list[str] = [
         o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()
