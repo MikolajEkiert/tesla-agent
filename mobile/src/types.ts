@@ -28,3 +28,9 @@ export interface ChatResponse {
   history: Record<string, unknown>[];
   tool_trace: ToolCall[];
 }
+
+export interface AuthStatus {
+  /** false on the mock adapter — no Tesla login needed at all. */
+  required: boolean;
+  connected: boolean;
+}

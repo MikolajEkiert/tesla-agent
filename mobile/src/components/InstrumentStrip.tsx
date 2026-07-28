@@ -1,5 +1,5 @@
 import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { color, font, space } from "../theme";
 import type { VehicleState } from "../types";
 
@@ -12,15 +12,32 @@ function Reading({ dot, label }: { dot: string; label: string }) {
   );
 }
 
-export function InstrumentStrip({ state }: { state: VehicleState | null }) {
+export function InstrumentStrip({
+  state,
+  onDisconnect,
+}: {
+  state: VehicleState | null;
+  /** Omit to hide the disconnect affordance entirely (e.g. on the mock adapter). */
+  onDisconnect?: () => void;
+}) {
   const battery = state?.battery_percent;
   const locked = state?.locked;
   const climateOn = state?.climate_on;
   const target = state?.target_temp_c;
 
+  const handleLongPress = () => {
+    if (!onDisconnect) return;
+    Alert.alert("Disconnect Tesla account?", "You'll need to reconnect to control the car again.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Disconnect", style: "destructive", onPress: onDisconnect },
+    ]);
+  };
+
   return (
     <View style={styles.container}>
-      <Text style={styles.brand}>AMP</Text>
+      <Pressable onLongPress={handleLongPress} hitSlop={8}>
+        <Text style={styles.brand}>AMP</Text>
+      </Pressable>
       <View style={styles.readings}>
         {battery != null && (
           <Reading dot={color.charge} label={`${Math.round(battery)}%`} />

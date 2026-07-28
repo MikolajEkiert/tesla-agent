@@ -20,13 +20,21 @@ import type { ChatItem, VehicleState } from "../types";
 let nextId = 0;
 const id = () => String(nextId++);
 
-export function ChatScreen() {
+export function ChatScreen({
+  justConnected,
+  onDisconnect,
+}: {
+  justConnected?: boolean;
+  onDisconnect?: () => void;
+}) {
   const [items, setItems] = useState<ChatItem[]>([
     {
       kind: "message",
       id: id(),
       role: "assistant",
-      text: "Good evening. What do you need?",
+      text: justConnected
+        ? "Connected to your Tesla. What do you need?"
+        : "Good evening. What do you need?",
     },
   ]);
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
@@ -80,7 +88,7 @@ export function ChatScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <InstrumentStrip state={vehicle} />
+      <InstrumentStrip state={vehicle} onDisconnect={onDisconnect} />
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
