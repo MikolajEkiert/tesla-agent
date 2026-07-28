@@ -78,3 +78,79 @@ class MockImpl:
 
     async def flash_lights(self) -> dict[str, Any]:
         return {"ok": True, "flashed": True}
+
+    async def set_navigation_destination(self, address: str) -> dict[str, Any]:
+        self._state["navigating_to"] = address
+        return {"ok": True, "destination": address}
+
+    async def nearby_chargers(self) -> dict[str, Any]:
+        return {
+            "sites": [
+                {
+                    "name": "Kraków, Poland",
+                    "type": "supercharger",
+                    "distance_km": 9.4,
+                    "available_stalls": 8,
+                    "total_stalls": 16,
+                    "closed": False,
+                    "navigate_to": "50.0273,19.9528",
+                },
+                {
+                    "name": "INX Design Hotel",
+                    "type": "destination",
+                    "distance_km": 10.5,
+                    "navigate_to": "50.051056,19.95106",
+                },
+            ],
+            "source": "tesla",
+        }
+
+    async def get_location(self) -> dict[str, Any]:
+        return {
+            "latitude": 50.006477,
+            "longitude": 20.08068,
+            "address": "Wielicka, Kraków, Poland",
+            "map_url": "https://www.openstreetmap.org/?mlat=50.006477&mlon=20.08068",
+        }
+
+    async def set_scheduled_charging(
+        self, enable: bool, minutes_after_midnight: int
+    ) -> dict[str, Any]:
+        self._state["scheduled_charging"] = (
+            {"enabled": True, "minutes_after_midnight": minutes_after_midnight}
+            if enable
+            else {"enabled": False}
+        )
+        return {"ok": True, **self._state["scheduled_charging"]}
+
+    async def set_cabin_overheat_protection(
+        self, on: bool, fan_only: bool = False
+    ) -> dict[str, Any]:
+        self._state["cabin_overheat_protection"] = {"on": on, "fan_only": fan_only}
+        return {"ok": True, "on": on, "fan_only": fan_only}
+
+    async def set_climate_keeper_mode(self, mode: str) -> dict[str, Any]:
+        self._state["climate_keeper_mode"] = mode
+        return {"ok": True, "mode": mode}
+
+    async def set_sentry_mode(self, on: bool) -> dict[str, Any]:
+        self._state["sentry_mode"] = on
+        return {"ok": True, "sentry_mode": on}
+
+    async def control_windows(self, command: str) -> dict[str, Any]:
+        if command not in ("vent", "close"):
+            raise ValueError("command must be 'vent' or 'close'")
+        self._state["windows"] = command
+        return {"ok": True, "windows": command}
+
+    async def actuate_trunk(self, which: str) -> dict[str, Any]:
+        if which not in ("front", "rear"):
+            raise ValueError("which must be 'front' or 'rear'")
+        return {"ok": True, "trunk": which}
+
+    async def charge_port(self, open_port: bool) -> dict[str, Any]:
+        self._state["charge_port_open"] = open_port
+        return {"ok": True, "charge_port_open": open_port}
+
+    async def trigger_homelink(self) -> dict[str, Any]:
+        return {"ok": True, "homelink": "triggered"}

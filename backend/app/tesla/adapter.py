@@ -64,6 +64,50 @@ class TeslaAdapter(ABC):
     @abstractmethod
     async def flash_lights(self) -> dict[str, Any]: ...
 
+    # --- navigation ---
+    @abstractmethod
+    async def set_navigation_destination(self, address: str) -> dict[str, Any]:
+        """Free-text address/place name; Tesla geocodes it server-side."""
+
+    @abstractmethod
+    async def nearby_chargers(self) -> dict[str, Any]:
+        """Charging sites around the car's current position."""
+
+    @abstractmethod
+    async def get_location(self) -> dict[str, Any]:
+        """Where the car is: coordinates plus a human-readable address."""
+
+    # --- native scheduling / comfort (run in the car, not on our server) ---
+    @abstractmethod
+    async def set_scheduled_charging(self, enable: bool, minutes_after_midnight: int) -> dict[str, Any]:
+        """Daily start time for charging, in the car's own local time."""
+
+    @abstractmethod
+    async def set_cabin_overheat_protection(self, on: bool, fan_only: bool = False) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def set_climate_keeper_mode(self, mode: str) -> dict[str, Any]:
+        """mode in {off, on, dog, camp}."""
+
+    # --- everyday odds and ends ---
+    @abstractmethod
+    async def set_sentry_mode(self, on: bool) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def control_windows(self, command: str) -> dict[str, Any]:
+        """command in {vent, close}."""
+
+    @abstractmethod
+    async def actuate_trunk(self, which: str) -> dict[str, Any]:
+        """which in {front, rear}."""
+
+    @abstractmethod
+    async def charge_port(self, open_port: bool) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def trigger_homelink(self) -> dict[str, Any]:
+        """Garage door etc. at the car's current position."""
+
 
 def build_adapter() -> TeslaAdapter:
     """Factory: pick the implementation from config. Import lazily so the mock

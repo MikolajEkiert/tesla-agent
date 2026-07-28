@@ -28,6 +28,10 @@ import httpx
 
 from app.auth.oauth import TokenStore
 from app.config import get_settings
+from app.geo import reverse_geocode
+
+# Mode numbers come from the proxy's own dispatch table (pkg/proxy/command.go).
+CLIMATE_KEEPER_MODES = {"off": 0, "on": 1, "dog": 2, "camp": 3}
 
 WAKE_POLL_INTERVAL_S = 3
 WAKE_TIMEOUT_S = 40
@@ -44,11 +48,78 @@ class VehicleAsleepError(Exception):
     to a clear RuntimeError."""
 
 
+def _raise_for_status(r: httpx.Response, source: str) -> None:
+    """httpx's own raise_for_status reports only the status line and URL,
+    dropping the response body — which is where both Tesla and the proxy put
+    the actual reason. That cost a real debugging session (a 404 whose body
+    said "expected 17-character VIN in path" looked like a generic outage,
+    and the assistant guessed "the car is asleep"). Keep the body."""
+    if r.is_success:
+        return
+    detail = r.text.strip()
+    raise RuntimeError(
+        f"{source} returned HTTP {r.status_code}"
+        + (f": {detail[:400]}" if detail else "")
+    )
+
+
+MILES_TO_KM = 1.609344
+
+
+def _coords(location: dict[str, Any] | None) -> str | None:
+    """A "lat,long" string that set_navigation_destination accepts verbatim.
+
+    Supplied ready-made because Tesla names its Superchargers after the town
+    ("Kraków, Poland"), and sending that as free text geocodes to the town
+    centre rather than the charger. Coordinates are accepted by the same
+    endpoint and land on the actual site — verified against the car.
+    """
+    if not location:
+        return None
+    lat, lon = location.get("lat"), location.get("long")
+    if lat is None or lon is None:
+        return None
+    return f"{lat},{lon}"
+
+
+def _normalize_chargers(data: dict[str, Any]) -> dict[str, Any]:
+    """Flatten Tesla's two arrays into one ranked list.
+
+    Distances arrive in miles regardless of the car's own display units, so
+    they're converted here — everything downstream (and the user) is metric.
+    """
+    sites: list[dict[str, Any]] = []
+    for entry in data.get("superchargers", []) or []:
+        sites.append(
+            {
+                "name": entry.get("name"),
+                "type": "supercharger",
+                "distance_km": round(entry.get("distance_miles", 0) * MILES_TO_KM, 1),
+                "available_stalls": entry.get("available_stalls"),
+                "total_stalls": entry.get("total_stalls"),
+                "closed": entry.get("site_closed", False),
+                "navigate_to": _coords(entry.get("location")),
+            }
+        )
+    for entry in data.get("destination_charging", []) or []:
+        sites.append(
+            {
+                "name": entry.get("name"),
+                "type": "destination",
+                "distance_km": round(entry.get("distance_miles", 0) * MILES_TO_KM, 1),
+                "navigate_to": _coords(entry.get("location")),
+            }
+        )
+    sites.sort(key=lambda s: s["distance_km"])
+    return {"sites": sites, "source": "tesla"}
+
+
 class FleetImpl:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.tokens = TokenStore()  # provides a valid access token, refreshing as needed
         self._vehicle_id: str | None = None
+        self._vehicle_vin: str | None = None
         # Last-known-good snapshot + when we got it (monotonic clock — this
         # is only ever compared to itself within one process's lifetime, so
         # wall-clock/timezone concerns don't apply).
@@ -59,28 +130,53 @@ class FleetImpl:
     async def _access_token(self) -> str:
         return await self.tokens.get_access_token()
 
-    async def _vehicle(self) -> str:
-        """Resolve and cache the vehicle id (Fleet uses the 'id' / 'vehicle_tag')."""
-        if self._vehicle_id:
-            return self._vehicle_id
+    async def _resolve_vehicle(self) -> None:
+        """Fetch and cache both identifiers for the account's first vehicle.
+
+        They are NOT interchangeable across our two backends: the Fleet API
+        takes the numeric `id` as its vehicle_tag, while the signing proxy
+        insists on the 17-character VIN and 404s on anything else (its own
+        error: "expected 17-character VIN in path (do not use Fleet API
+        ID)"). Resolve both once from the same response so neither path has
+        to guess."""
+        if self._vehicle_id and self._vehicle_vin:
+            return
         token = await self._access_token()
         async with httpx.AsyncClient(timeout=15) as c:
             r = await c.get(
                 f"{self.settings.tesla_fleet_base}/api/1/vehicles",
                 headers={"Authorization": f"Bearer {token}"},
             )
-            r.raise_for_status()
+            _raise_for_status(r, "Tesla Fleet API (vehicle list)")
             vehicles = r.json()["response"]
             if not vehicles:
                 raise RuntimeError("No vehicles on this Tesla account")
             self._vehicle_id = str(vehicles[0]["id"])
-            return self._vehicle_id
+            self._vehicle_vin = str(vehicles[0]["vin"])
+
+    async def _vehicle(self) -> str:
+        """Numeric Fleet API vehicle_tag — for direct Fleet API calls."""
+        await self._resolve_vehicle()
+        return self._vehicle_id  # type: ignore[return-value]
+
+    async def _vin(self) -> str:
+        """17-character VIN — required by the signing proxy's URL path."""
+        await self._resolve_vehicle()
+        return self._vehicle_vin  # type: ignore[return-value]
 
     async def _fetch_vehicle_data(self) -> dict[str, Any]:
         """Raw vehicle_data fetch. Raises VehicleAsleepError on 408 instead
         of a generic HTTP error, so callers decide what "asleep" means to
         them. Never wakes the car — a plain GET, confirmed Tesla doesn't
-        treat this as a wake trigger."""
+        treat this as a wake trigger.
+
+        A car that's asleep doesn't always 408 — one caught in production:
+        a car that had just gone idle returned a plain 200 with a payload
+        whose top-level `state` was "asleep"/"offline", but whose
+        charge_state/climate_state fields still held Tesla's last-cached
+        values from hours earlier (a real drive's worth of battery drain
+        stale). Trusting any 200 as "live" served that stale snapshot as
+        current. So check `state` explicitly, not just the HTTP status."""
         token = await self._access_token()
         vid = await self._vehicle()
         async with httpx.AsyncClient(timeout=15) as c:
@@ -90,8 +186,11 @@ class FleetImpl:
             )
         if r.status_code == 408:
             raise VehicleAsleepError()
-        r.raise_for_status()
-        return r.json()["response"]
+        _raise_for_status(r, "Tesla Fleet API (vehicle_data)")
+        data = r.json()["response"]
+        if data.get("state") != "online":
+            raise VehicleAsleepError()
+        return data
 
     def _normalize(self, data: dict[str, Any]) -> dict[str, Any]:
         charge_state = data.get("charge_state", {})
@@ -127,7 +226,7 @@ class FleetImpl:
                 f"{self.settings.tesla_fleet_base}/api/1/vehicles/{vid}/wake_up",
                 headers={"Authorization": f"Bearer {token}"},
             )
-            r.raise_for_status()
+            _raise_for_status(r, "Tesla Fleet API (wake_up)")
 
     async def _wake_and_wait(self) -> None:
         """POST wake_up, then poll vehicle_data until it stops 408ing (the
@@ -155,22 +254,63 @@ class FleetImpl:
         )
 
     async def _send_signed(
-        self, token: str, vid: str, name: str, payload: dict[str, Any] | None
+        self, token: str, name: str, payload: dict[str, Any] | None
     ) -> dict[str, Any]:
+        """Addressed by VIN, not the Fleet API id — the proxy rejects the
+        latter outright (see _resolve_vehicle)."""
+        vin = await self._vin()
         async with httpx.AsyncClient(timeout=20, verify=False) as c:  # proxy uses a local cert
             r = await c.post(
-                f"{self.settings.tesla_proxy_url}/api/1/vehicles/{vid}/command/{name}",
+                f"{self.settings.tesla_proxy_url}/api/1/vehicles/{vin}/command/{name}",
                 headers={"Authorization": f"Bearer {token}"},
                 json=payload or {},
             )
         if r.status_code == 408:
             raise VehicleAsleepError()
-        r.raise_for_status()
+        # The car rejects every signed command until our virtual key is in
+        # its keychain. Raw, this reads like an outage; spell out the actual
+        # (one-time, user-side) fix instead — see fleet_status's
+        # unpaired_vins for the authoritative state.
+        if "not been paired" in r.text:
+            raise RuntimeError(
+                "Amp's virtual key isn't paired with the car yet, so it "
+                "rejects remote commands. Open https://tesla.com/_ak/"
+                "tesla-amp.duckdns.org in the Tesla app to add it. The "
+                "vehicle's owner account can do this from anywhere; a "
+                "driver/co-owner account has to be next to the car, in "
+                "Bluetooth range, with the physical key card."
+            )
+        _raise_for_status(r, "Tesla signing proxy")
         return r.json()
 
-    async def _command(self, name: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Send a SIGNED command through the vehicle-command proxy, waking
-        the car first if it's not already known to be awake."""
+    async def _send_direct(
+        self, token: str, name: str, payload: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """POST straight to the Fleet API, bypassing the signing proxy. Only
+        for the handful of commands the proxy itself refuses to sign — its
+        own source (pkg/proxy/command.go) returns ErrCommandUseRESTAPI for
+        `navigation_request`/`share`, since these need server-side geocoding
+        that can't be end-to-end authenticated with the vehicle key."""
+        vid = await self._vehicle()
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(
+                f"{self.settings.tesla_fleet_base}/api/1/vehicles/{vid}/command/{name}",
+                headers={"Authorization": f"Bearer {token}"},
+                json=payload or {},
+            )
+        if r.status_code == 408:
+            raise VehicleAsleepError()
+        _raise_for_status(r, "Tesla Fleet API")
+        return r.json()
+
+    async def _command(
+        self, name: str, payload: dict[str, Any] | None = None, *, signed: bool = True
+    ) -> dict[str, Any]:
+        """Send a command, waking the car first if it's not already known to
+        be awake. `signed` (default) routes through the vehicle-command
+        proxy — required for anything this car treats as a real vehicle
+        command (locks, climate, ...). Pass `signed=False` for the few
+        commands (navigation/share) the proxy refuses to handle itself."""
         recently_awake = (
             self._last_awake_at is not None
             and time.monotonic() - self._last_awake_at < AWAKE_CACHE_TTL_S
@@ -179,16 +319,16 @@ class FleetImpl:
             await self._wake_and_wait()
 
         token = await self._access_token()
-        vid = await self._vehicle()
+        send = self._send_signed if signed else self._send_direct
         try:
-            return await self._send_signed(token, vid, name, payload)
+            return await send(token, name, payload)
         except VehicleAsleepError:
             # Fell back asleep between the check above and now, or the
             # awake-cache was stale. Wake once more and retry exactly once
             # — if it fails again, let the error surface rather than loop.
             await self._wake_and_wait()
             token = await self._access_token()
-            return await self._send_signed(token, vid, name, payload)
+            return await send(token, name, payload)
 
     # --- reads ---
     async def get_state(self) -> dict[str, Any]:
@@ -255,3 +395,146 @@ class FleetImpl:
 
     async def flash_lights(self) -> dict[str, Any]:
         return await self._command("flash_lights")
+
+    # --- charging sites ---
+    async def nearby_chargers(self) -> dict[str, Any]:
+        """Tesla's own list of charging sites around the car, including live
+        stall availability — nothing third-party comes close on that, and it
+        costs no extra API key.
+
+        Unlike get_state this *may* wake the car: the answer depends on where
+        the car currently is, and the user asked for it explicitly (it's not
+        background polling), so a stale or empty answer would be worse than a
+        wake. The cheap read is still tried first.
+        """
+        token = await self._access_token()
+        vid = await self._vehicle()
+
+        async def fetch() -> dict[str, Any]:
+            async with httpx.AsyncClient(timeout=25) as c:
+                r = await c.get(
+                    f"{self.settings.tesla_fleet_base}/api/1/vehicles/{vid}/nearby_charging_sites",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            if r.status_code == 408:
+                raise VehicleAsleepError()
+            _raise_for_status(r, "Tesla Fleet API (nearby_charging_sites)")
+            return r.json()["response"]
+
+        try:
+            data = await fetch()
+        except VehicleAsleepError:
+            await self._wake_and_wait()
+            data = await fetch()
+        return _normalize_chargers(data)
+
+    # --- location ---
+    async def _coordinates(self) -> tuple[float, float]:
+        """Raw position, with no third-party lookup — commands that merely
+        need coordinates (HomeLink) shouldn't ship the car's location off to
+        a geocoder just to get a street name nobody asked for.
+
+        `location_data` has to be requested explicitly: a plain vehicle_data
+        call comes back without coordinates even though the scope allows them.
+        """
+        token = await self._access_token()
+        vid = await self._vehicle()
+
+        async def fetch() -> dict[str, Any]:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(
+                    f"{self.settings.tesla_fleet_base}/api/1/vehicles/{vid}/vehicle_data",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"endpoints": "drive_state;location_data"},
+                )
+            if r.status_code == 408:
+                raise VehicleAsleepError()
+            _raise_for_status(r, "Tesla Fleet API (location)")
+            return r.json()["response"]
+
+        try:
+            data = await fetch()
+        except VehicleAsleepError:
+            await self._wake_and_wait()
+            data = await fetch()
+
+        drive = data.get("drive_state", {}) or {}
+        lat, lon = drive.get("latitude"), drive.get("longitude")
+        if lat is None or lon is None:
+            raise RuntimeError("The car didn't report a position.")
+        return lat, lon
+
+    async def get_location(self) -> dict[str, Any]:
+        """Coordinates plus a street address."""
+        lat, lon = await self._coordinates()
+        address = await reverse_geocode(lat, lon)
+        return {
+            "latitude": lat,
+            "longitude": lon,
+            "address": address,
+            "map_url": f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=17/{lat}/{lon}",
+        }
+
+    # --- native scheduling / comfort ---
+    async def set_scheduled_charging(
+        self, enable: bool, minutes_after_midnight: int
+    ) -> dict[str, Any]:
+        return await self._command(
+            "set_scheduled_charging", {"enable": enable, "time": minutes_after_midnight}
+        )
+
+    async def set_cabin_overheat_protection(
+        self, on: bool, fan_only: bool = False
+    ) -> dict[str, Any]:
+        return await self._command(
+            "set_cabin_overheat_protection", {"on": on, "fan_only": fan_only}
+        )
+
+    async def set_climate_keeper_mode(self, mode: str) -> dict[str, Any]:
+        return await self._command(
+            "set_climate_keeper_mode", {"climate_keeper_mode": CLIMATE_KEEPER_MODES[mode]}
+        )
+
+    # --- everyday odds and ends ---
+    async def set_sentry_mode(self, on: bool) -> dict[str, Any]:
+        return await self._command("set_sentry_mode", {"on": on})
+
+    async def control_windows(self, command: str) -> dict[str, Any]:
+        if command not in ("vent", "close"):
+            raise ValueError("command must be 'vent' or 'close'")
+        return await self._command("window_control", {"command": command})
+
+    async def actuate_trunk(self, which: str) -> dict[str, Any]:
+        if which not in ("front", "rear"):
+            raise ValueError("which must be 'front' or 'rear'")
+        return await self._command("actuate_trunk", {"which_trunk": which})
+
+    async def charge_port(self, open_port: bool) -> dict[str, Any]:
+        return await self._command(
+            "charge_port_door_open" if open_port else "charge_port_door_close"
+        )
+
+    async def trigger_homelink(self) -> dict[str, Any]:
+        # The car matches these coordinates against the HomeLink device it has
+        # paired for that spot, so they must be the car's own position.
+        lat, lon = await self._coordinates()
+        return await self._command("trigger_homelink", {"lat": lat, "lon": lon})
+
+    # --- navigation (unsigned — the proxy itself refuses this command) ---
+    async def set_navigation_destination(self, address: str) -> dict[str, Any]:
+        """Free-text address/place; Tesla geocodes it server-side. This is
+        `share` (the current, documented replacement for the retired
+        `navigation_request`), not `navigation_sc_request` — that endpoint's
+        request parameters were never documented by Tesla, and developers
+        who've tried it report it returns "success" but the car's nav just
+        sits at "calculating" forever."""
+        return await self._command(
+            "share",
+            {
+                "type": "share_ext_content_raw",
+                "value": {"android.intent.extra.TEXT": address},
+                "locale": "en-US",
+                "timestamp_ms": str(int(time.time() * 1000)),
+            },
+            signed=False,
+        )
