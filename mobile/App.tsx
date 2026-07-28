@@ -17,6 +17,7 @@ import React, { useEffect, useState } from "react";
 import { Platform, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { disconnectTesla, fetchAuthStatus } from "./src/api";
+import { LanguageProvider, useLanguage } from "./src/LanguageContext";
 import { ChatScreen } from "./src/screens/ChatScreen";
 import { ConnectScreen } from "./src/screens/ConnectScreen";
 import { color } from "./src/theme";
@@ -48,7 +49,7 @@ function useAuthCallbackNotice(): { success: boolean; error: string | null } {
   return notice;
 }
 
-export default function App() {
+function AppInner() {
   const [fontsLoaded] = useFonts({
     SpaceGrotesk_600SemiBold,
     SpaceGrotesk_700Bold,
@@ -60,6 +61,7 @@ export default function App() {
   });
 
   const notice = useAuthCallbackNotice();
+  const { ready: languageReady } = useLanguage();
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
 
   useEffect(() => {
@@ -76,7 +78,7 @@ export default function App() {
       .finally(() => setAuthStatus((prev) => (prev ? { ...prev, connected: false } : prev)));
   };
 
-  if (!fontsLoaded || !authStatus) {
+  if (!fontsLoaded || !authStatus || !languageReady) {
     return <View style={{ flex: 1, backgroundColor: color.bg }} />;
   }
 
@@ -91,5 +93,13 @@ export default function App() {
         <ChatScreen justConnected={notice.success} onDisconnect={handleDisconnect} />
       )}
     </SafeAreaProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <LanguageProvider>
+      <AppInner />
+    </LanguageProvider>
   );
 }

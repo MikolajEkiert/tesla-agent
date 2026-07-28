@@ -12,7 +12,7 @@ from google import genai
 from google.genai import types
 
 from app.config import get_settings
-from app.llm.prompt import SYSTEM_PROMPT
+from app.llm.prompt import build_system_prompt
 from app.tesla.adapter import TeslaAdapter
 from app.tools import TOOLS, dispatch
 
@@ -55,24 +55,33 @@ class GeminiOrchestrator:
         self.adapter = adapter
         self.settings = get_settings()
         self.client = genai.Client(api_key=self.settings.gemini_api_key)
-        self.config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            tools=[types.Tool(function_declarations=_function_declarations())],
+        self._tools = [types.Tool(function_declarations=_function_declarations())]
+
+    def _config(self, language: str | None) -> types.GenerateContentConfig:
+        # Built fresh per request (cheap) since the system instruction
+        # depends on the caller's language setting, not just the adapter.
+        return types.GenerateContentConfig(
+            system_instruction=build_system_prompt(language),
+            tools=self._tools,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
 
     async def chat(
-        self, user_text: str, history: list[dict[str, Any]] | None = None
+        self,
+        user_text: str,
+        history: list[dict[str, Any]] | None = None,
+        language: str | None = None,
     ) -> dict[str, Any]:
         contents: list[dict[str, Any]] = list(history or [])
         contents.append({"role": "user", "parts": [{"text": user_text}]})
         tool_trace: list[dict[str, Any]] = []
+        config = self._config(language)
 
         while True:
             resp = await self.client.aio.models.generate_content(
                 model=self.settings.gemini_model,
                 contents=contents,
-                config=self.config,
+                config=config,
             )
             model_content = resp.candidates[0].content
             # Echo the model turn (incl. any function_call parts) into history.

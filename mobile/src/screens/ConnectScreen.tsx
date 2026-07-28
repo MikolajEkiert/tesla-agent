@@ -2,6 +2,7 @@ import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { startTeslaLogin } from "../api";
+import { useLanguage } from "../LanguageContext";
 import { color, font, radius, space } from "../theme";
 
 /**
@@ -10,17 +11,14 @@ import { color, font, radius, space } from "../theme";
  * entirely, see App.tsx). One job: get the user to /auth/login.
  */
 export function ConnectScreen({ errorMessage }: { errorMessage?: string | null }) {
+  const { t } = useLanguage();
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <View style={styles.content}>
         <View style={styles.bolt} />
         <Text style={styles.brand}>AMP</Text>
-        <Text style={styles.headline}>Connect your Tesla</Text>
-        <Text style={styles.body}>
-          Amp needs access to your Tesla account to read your car's state and
-          send commands. This links directly with Tesla — your credentials
-          never touch this app.
-        </Text>
+        <Text style={styles.headline}>{t("connectHeadline")}</Text>
+        <Text style={styles.body}>{t("connectBody")}</Text>
 
         {errorMessage && (
           <View style={styles.errorBox}>
@@ -32,7 +30,7 @@ export function ConnectScreen({ errorMessage }: { errorMessage?: string | null }
           onPress={startTeslaLogin}
           style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
         >
-          <Text style={styles.buttonText}>Connect Tesla Account</Text>
+          <Text style={styles.buttonText}>{t("connectButton")}</Text>
         </Pressable>
       </View>
     </SafeAreaView>

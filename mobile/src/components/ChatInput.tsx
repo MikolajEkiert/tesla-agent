@@ -7,6 +7,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { useLanguage } from "../LanguageContext";
 import { color, font, radius, space } from "../theme";
 
 export function ChatInput({
@@ -16,6 +17,7 @@ export function ChatInput({
   onSend: (text: string) => void;
   disabled: boolean;
 }) {
+  const { t } = useLanguage();
   const [text, setText] = useState("");
   const [focused, setFocused] = useState(false);
 
@@ -33,7 +35,7 @@ export function ChatInput({
         <TextInput
           value={text}
           onChangeText={setText}
-          placeholder="Ask Amp…"
+          placeholder={t("askPlaceholder")}
           placeholderTextColor={color.textTertiary}
           style={styles.input}
           onFocus={() => setFocused(true)}

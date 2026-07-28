@@ -9,7 +9,7 @@ from typing import Any
 from anthropic import AsyncAnthropic
 
 from app.config import get_settings
-from app.llm.prompt import SYSTEM_PROMPT
+from app.llm.prompt import build_system_prompt
 from app.tesla.adapter import TeslaAdapter
 from app.tools import TOOLS, dispatch
 
@@ -22,7 +22,12 @@ class AnthropicOrchestrator:
         self.settings = get_settings()
         self.client = AsyncAnthropic(api_key=self.settings.anthropic_api_key)
 
-    async def chat(self, user_text: str, history: list[Message] | None = None) -> dict[str, Any]:
+    async def chat(
+        self,
+        user_text: str,
+        history: list[Message] | None = None,
+        language: str | None = None,
+    ) -> dict[str, Any]:
         messages: list[Message] = list(history or [])
         messages.append({"role": "user", "content": user_text})
         tool_trace: list[dict[str, Any]] = []
@@ -35,7 +40,7 @@ class AnthropicOrchestrator:
                 # default (do NOT disable it on Opus 5 — with tools it can emit
                 # tool calls as plain text).
                 output_config={"effort": "low"},
-                system=SYSTEM_PROMPT,
+                system=build_system_prompt(language),
                 tools=TOOLS,
                 messages=messages,
             )
