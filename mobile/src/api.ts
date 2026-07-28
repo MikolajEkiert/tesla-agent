@@ -1,5 +1,5 @@
 import { Linking, Platform } from "react-native";
-import type { AuthStatus, ChatResponse, VehicleState } from "./types";
+import type { AuthStatus, ChatResponse, ScheduledAction, VehicleState } from "./types";
 
 /**
  * Web (the deployed PWA) defaults to same-origin — Caddy already routes
@@ -39,12 +39,13 @@ async function errorDetail(res: Response): Promise<string> {
 
 export async function sendMessage(
   message: string,
-  history: Record<string, unknown>[]
+  history: Record<string, unknown>[],
+  language?: string
 ): Promise<ChatResponse> {
   const res = await fetch(`${DEFAULT_BASE_URL}/chat`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ message, history }),
+    body: JSON.stringify({ message, history, language }),
   });
   if (!res.ok) {
     throw new BackendError(await errorDetail(res));
@@ -58,6 +59,24 @@ export async function fetchVehicleState(): Promise<VehicleState> {
     throw new BackendError(await errorDetail(res));
   }
   return res.json();
+}
+
+export async function fetchScheduledActions(): Promise<ScheduledAction[]> {
+  const res = await fetch(`${DEFAULT_BASE_URL}/jobs`);
+  if (!res.ok) {
+    throw new BackendError(await errorDetail(res));
+  }
+  const body = await res.json();
+  return body.actions ?? [];
+}
+
+export async function cancelScheduledAction(id: string): Promise<void> {
+  const res = await fetch(`${DEFAULT_BASE_URL}/jobs/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    throw new BackendError(await errorDetail(res));
+  }
 }
 
 export async function fetchAuthStatus(): Promise<AuthStatus> {

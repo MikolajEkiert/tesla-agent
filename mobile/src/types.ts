@@ -35,6 +35,30 @@ export interface ChatResponse {
   tool_trace: ToolCall[];
 }
 
+/**
+ * One thing the user asked for ("run climate for 10 minutes"), which the
+ * backend may implement as several jobs. `meta` is structured rather than a
+ * ready-made sentence so the sidebar can label it in the chosen language.
+ */
+export interface ScheduledAction {
+  id: string;
+  kind: string;
+  state: "scheduled" | "running" | "done" | "failed" | "cancelled";
+  meta: {
+    temp_c?: number | null;
+    delay_minutes?: number | null;
+    run_for_minutes?: number | null;
+    [key: string]: unknown;
+  };
+  created_at: number;
+  starts_at: number;
+  ends_at: number;
+  /** Unix seconds of the next job still to run, or null if none are pending. */
+  next_run_at: number | null;
+  cancellable: boolean;
+  error: string | null;
+}
+
 export interface AuthStatus {
   /** false on the mock adapter — no Tesla login needed at all. */
   required: boolean;

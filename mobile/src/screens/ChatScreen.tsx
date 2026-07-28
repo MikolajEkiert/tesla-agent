@@ -8,14 +8,27 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { BackendError, fetchVehicleState, sendMessage } from "../api";
+import {
+  BackendError,
+  cancelScheduledAction,
+  fetchScheduledActions,
+  fetchVehicleState,
+  sendMessage,
+} from "../api";
 import { ChatInput } from "../components/ChatInput";
 import { InstrumentStrip } from "../components/InstrumentStrip";
 import { MessageRow } from "../components/MessageRow";
+import { Sidebar } from "../components/Sidebar";
 import { ToolLogLine } from "../components/ToolLogLine";
 import { TypingDots } from "../components/TypingDots";
+import { greeting } from "../i18n";
+import { useLanguage } from "../LanguageContext";
+import { SettingsScreen } from "./SettingsScreen";
 import { color, font, space } from "../theme";
-import type { ChatItem, VehicleState } from "../types";
+import type { ChatItem, ScheduledAction, VehicleState } from "../types";
+
+/** Countdowns in the drawer would otherwise sit frozen while it's open. */
+const QUEUE_POLL_MS = 15000;
 
 let nextId = 0;
 const id = () => String(nextId++);
@@ -27,14 +40,16 @@ export function ChatScreen({
   justConnected?: boolean;
   onDisconnect?: () => void;
 }) {
+  const { language, t } = useLanguage();
+  const [showSettings, setShowSettings] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [scheduled, setScheduled] = useState<ScheduledAction[]>([]);
   const [items, setItems] = useState<ChatItem[]>([
     {
       kind: "message",
       id: id(),
       role: "assistant",
-      text: justConnected
-        ? "Connected to your Tesla. What do you need?"
-        : "Good evening. What do you need?",
+      text: justConnected ? t("connectedGreeting") : greeting(language, new Date().getHours()),
     },
   ]);
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
@@ -51,9 +66,52 @@ export function ChatScreen({
       });
   }, []);
 
+  const refreshScheduled = useCallback(() => {
+    fetchScheduledActions()
+      .then(setScheduled)
+      .catch(() => {
+        /* drawer just shows an empty queue if the backend is unreachable */
+      });
+  }, []);
+
   useEffect(() => {
     refreshVehicle();
-  }, [refreshVehicle]);
+    refreshScheduled();
+  }, [refreshVehicle, refreshScheduled]);
+
+  // Timers tick down server-side, so the queue has to be re-read rather than
+  // counted down locally — a stop job that already fired should stop showing
+  // "stops in 1 min".
+  useEffect(() => {
+    const id = setInterval(refreshScheduled, QUEUE_POLL_MS);
+    return () => clearInterval(id);
+  }, [refreshScheduled]);
+
+  const handleCancelAction = useCallback(
+    (actionId: string) => {
+      cancelScheduledAction(actionId)
+        .catch(() => {})
+        .finally(() => {
+          refreshScheduled();
+          refreshVehicle();
+        });
+    },
+    [refreshScheduled, refreshVehicle]
+  );
+
+  // The opening greeting is generated once at mount, before the user has
+  // picked a language — if they open Settings and switch it before saying
+  // anything, re-render that one message so it doesn't stay stuck in
+  // whatever language happened to be active on mount. Once a real exchange
+  // has happened (items.length > 1), this is a no-op — actual conversation
+  // history is never retranslated.
+  useEffect(() => {
+    setItems((prev) => {
+      if (prev.length !== 1 || prev[0].kind !== "message") return prev;
+      const text = justConnected ? t("connectedGreeting") : greeting(language, new Date().getHours());
+      return [{ ...prev[0], text }];
+    });
+  }, [language, justConnected, t]);
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -61,7 +119,7 @@ export function ChatScreen({
       setItems((prev) => [...prev, { kind: "message", id: id(), role: "user", text }]);
       setPending(true);
       try {
-        const res = await sendMessage(text, history);
+        const res = await sendMessage(text, history, language);
         setHistory(res.history);
         setItems((prev) => [
           ...prev,
@@ -71,18 +129,19 @@ export function ChatScreen({
           { kind: "message", id: id(), role: "assistant", text: res.reply },
         ]);
         refreshVehicle();
+        // A turn may have created or cancelled a timer — reflect it at once
+        // instead of leaving the drawer stale until the next poll.
+        refreshScheduled();
       } catch (e) {
         // BackendError means the backend responded — show its actual reason
         // (e.g. an LLM rate limit). Anything else is a real connectivity
         // failure (fetch never got a response at all).
-        setError(
-          e instanceof BackendError ? e.message : "Couldn't reach Amp's backend. Is it running?"
-        );
+        setError(e instanceof BackendError ? e.message : t("errorUnreachable"));
       } finally {
         setPending(false);
       }
     },
-    [history, refreshVehicle]
+    [history, refreshVehicle, refreshScheduled, language, t]
   );
 
   useEffect(() => {
@@ -91,9 +150,25 @@ export function ChatScreen({
     }
   }, [items, pending]);
 
+  if (showSettings) {
+    return <SettingsScreen onClose={() => setShowSettings(false)} />;
+  }
+
+  const activeActions = scheduled.filter(
+    (a) => a.state === "scheduled" || a.state === "running"
+  );
+
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <InstrumentStrip state={vehicle} onDisconnect={onDisconnect} />
+      <InstrumentStrip
+        state={vehicle}
+        onDisconnect={onDisconnect}
+        onOpenMenu={() => {
+          refreshScheduled();
+          setMenuOpen(true);
+        }}
+        activeActionCount={activeActions.length}
+      />
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -120,6 +195,17 @@ export function ChatScreen({
         )}
         <ChatInput onSend={handleSend} disabled={pending} />
       </KeyboardAvoidingView>
+
+      <Sidebar
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        actions={scheduled}
+        onCancelAction={handleCancelAction}
+        onOpenSettings={() => {
+          setMenuOpen(false);
+          setShowSettings(true);
+        }}
+      />
     </SafeAreaView>
   );
 }
