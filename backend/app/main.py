@@ -3,6 +3,8 @@ Tesla needs (public key at /.well-known/..., and the OAuth callback).
 """
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import quote
 
@@ -11,13 +13,40 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 
+from app import scheduler
 from app.config import get_settings
 from app.llm import build_orchestrator
 from app.tesla.adapter import build_adapter
 from app.auth.oauth import disconnect, exchange_code, get_authorize_url, has_tokens
 
 settings = get_settings()
-app = FastAPI(title="tesla-agent")
+
+# One adapter + orchestrator for the process. The mock adapter holds state in
+# memory; the fleet adapter is stateless per request beyond cached tokens.
+# Built before the app so the lifespan runner below can take the same adapter
+# instance — the scheduler must act on the very same car state the API does.
+adapter = build_adapter()
+orchestrator = build_orchestrator(adapter)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Owns the scheduler's background runner. Starting it here (rather than
+    lazily on first use) is what makes a job survive a redeploy: on boot the
+    runner picks up everything still pending, including jobs whose run_at has
+    already passed while the container was down."""
+    task = asyncio.create_task(scheduler.runner_loop(adapter))
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="tesla-agent", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,15 +55,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# One adapter + orchestrator for the process. The mock adapter holds state in
-# memory; the fleet adapter is stateless per request beyond cached tokens.
-adapter = build_adapter()
-orchestrator = build_orchestrator(adapter)
-
 
 class ChatRequest(BaseModel):
     message: str
     history: list[dict[str, Any]] | None = None
+    # "en" | "pl" — mirrors the app's language setting (mobile/src/i18n.ts).
+    # Sets the assistant's *default* reply language; unrecognized/omitted
+    # values fall back to English in build_system_prompt.
+    language: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -55,7 +83,7 @@ async def health() -> dict[str, str]:
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
     try:
-        result = await orchestrator.chat(req.message, req.history)
+        result = await orchestrator.chat(req.message, req.history, req.language)
     except Exception as e:
         # Without this, any downstream failure (LLM rate limit, LLM outage,
         # a bad tool call) surfaces as FastAPI's generic, bodyless 500 —
@@ -76,6 +104,28 @@ async def vehicle_state() -> dict[str, Any]:
         return await adapter.get_state()
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/jobs")
+async def list_jobs() -> dict[str, Any]:
+    """Backs the sidebar's queue. Returns groups (one per thing the user
+    asked for), not raw jobs — and structured `meta` rather than rendered
+    text, so the app can label them in the user's chosen language."""
+    try:
+        return {"actions": await scheduler.list_groups(include_finished=True)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.delete("/jobs/{group_id}")
+async def cancel_job(group_id: str) -> dict[str, Any]:
+    try:
+        cancelled = await scheduler.cancel_group(group_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    if not cancelled:
+        raise HTTPException(status_code=404, detail="Nothing pending with that id")
+    return {"ok": True, "cancelled": group_id}
 
 
 # --- Tesla-required routes (only relevant once you go live on the fleet adapter) ---

@@ -17,6 +17,12 @@ tesla-amp.duckdns.org {
 	handle /health* {
 		reverse_proxy api:8000
 	}
+	# Scheduled-action queue behind the sidebar. Every backend path needs an
+	# entry here — anything unlisted falls through to the catch-all below and
+	# is answered by the static frontend with a confusing nginx 404.
+	handle /jobs* {
+		reverse_proxy api:8000
+	}
 	handle {
 		reverse_proxy frontend:80
 	}
