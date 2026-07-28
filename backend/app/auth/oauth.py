@@ -39,6 +39,22 @@ async def init_db() -> None:
         await db.commit()
 
 
+async def has_tokens() -> bool:
+    """Lightweight check for the mobile app's connect-status UI — no network
+    call, just whether a row exists."""
+    await init_db()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT 1 FROM tokens LIMIT 1") as cursor:
+            return await cursor.fetchone() is not None
+
+
+async def disconnect() -> None:
+    await init_db()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM tokens")
+        await db.commit()
+
+
 def get_authorize_url() -> tuple[str, str]:
     """Generates the authorization URL and state/verifier."""
     settings = get_settings()

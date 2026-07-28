@@ -4,6 +4,7 @@ Tesla needs (public key at /.well-known/..., and the OAuth callback).
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +14,7 @@ from pydantic import BaseModel
 from app.config import get_settings
 from app.llm import build_orchestrator
 from app.tesla.adapter import build_adapter
-from app.auth.oauth import get_authorize_url, exchange_code
+from app.auth.oauth import disconnect, exchange_code, get_authorize_url, has_tokens
 
 settings = get_settings()
 app = FastAPI(title="tesla-agent")
@@ -78,6 +79,22 @@ async def tesla_public_key() -> PlainTextResponse:
         )
 
 
+@app.get("/auth/status")
+async def auth_status() -> dict[str, bool]:
+    """Powers the mobile app's connect-to-Tesla gate. `required` is false on
+    the mock adapter, which needs no Tesla login at all."""
+    return {
+        "required": settings.tesla_adapter == "fleet",
+        "connected": await has_tokens(),
+    }
+
+
+@app.post("/auth/disconnect")
+async def auth_disconnect() -> dict[str, bool]:
+    await disconnect()
+    return {"connected": False}
+
+
 @app.get("/auth/login")
 async def auth_login() -> RedirectResponse:
     url, _ = get_authorize_url()
@@ -85,9 +102,12 @@ async def auth_login() -> RedirectResponse:
 
 
 @app.get("/auth/callback")
-async def auth_callback(code: str, state: str) -> dict[str, str]:
+async def auth_callback(code: str, state: str) -> RedirectResponse:
+    """Redirects back into the PWA (same domain) instead of showing raw JSON
+    in what's otherwise a dead-end OAuth tab. The app reads ?tesla_auth=...
+    on load to show a success/error message."""
     try:
         await exchange_code(code, state)
-        return {"status": "success", "message": "Tesla account linked successfully. You can close this window."}
+        return RedirectResponse("/?tesla_auth=success")
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return RedirectResponse(f"/?tesla_auth=error&message={quote(str(e))}")
