@@ -53,7 +53,9 @@ The mock car's state changes as you issue commands, so multi-turn requests like
 
 ## Going live on the real car (the one-time hard part)
 
-Do this only after the mock-backed chat loop works. Rough order:
+Do this only after the mock-backed chat loop works. Full, detailed
+step-by-step handoff plan: **[TESLA_GO_LIVE.md](TESLA_GO_LIVE.md)**. Rough
+order:
 
 1. **Register** a Fleet API app at <https://developer.tesla.com> (done — app
    `tesla-agent`). Note the client id/secret and your redirect URI.
