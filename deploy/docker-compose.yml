@@ -51,9 +51,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.proxy
+    # -host 0.0.0.0: the proxy defaults to binding "localhost", which only
+    # accepts connections from inside its own container — the api container
+    # (a separate network namespace) got a bare "connection refused" for
+    # every signed command (lock, climate, seat heaters, media, charging).
+    # Safe to open up here: this port is only `expose`d (not
+    # `ports`-published), so it's still unreachable from outside the compose
+    # network / the internet — only sibling containers can reach it.
     command: >
       -tls-key /certs/proxy-key.pem -cert /certs/proxy-cert.pem
-      -key-file /keys/private-key.pem -port 4443 -verbose
+      -key-file /keys/private-key.pem -host 0.0.0.0 -port 4443 -verbose
     volumes:
       - ./keys:/keys:ro
       - ./certs:/certs:ro
