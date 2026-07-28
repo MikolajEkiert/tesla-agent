@@ -1,0 +1,7 @@
+{
+  "name": "tesla-agent",
+  "private": true,
+  "scripts": {
+    "web": "cd mobile && EXPO_PUBLIC_API_URL=http://localhost:8123 npx expo start --web --port 8090"
+  }
+}
