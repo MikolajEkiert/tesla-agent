@@ -2,10 +2,20 @@ import { Platform } from "react-native";
 import type { ChatResponse, VehicleState } from "./types";
 
 /**
- * The API url defaults to the production endpoint if EXPO_PUBLIC_API_URL is not set.
+ * Web (the deployed PWA) defaults to same-origin — Caddy already routes
+ * /chat, /vehicle, /auth, and /.well-known on the same domain that serves
+ * the frontend, so no domain needs to be hardcoded here at all. Native iOS
+ * Simulator shares the host Mac's network (localhost works directly);
+ * Android's emulator needs 10.0.2.2 instead. A physical device, or pointing
+ * a native build at production, needs EXPO_PUBLIC_API_URL set explicitly.
  */
 const DEFAULT_BASE_URL =
-  process.env.EXPO_PUBLIC_API_URL ?? "https://tesla-amp.duckdns.org";
+  process.env.EXPO_PUBLIC_API_URL ??
+  (Platform.OS === "web"
+    ? ""
+    : Platform.OS === "android"
+    ? "http://10.0.2.2:8000"
+    : "http://localhost:8000");
 
 export async function sendMessage(
   message: string,

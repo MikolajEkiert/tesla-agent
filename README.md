@@ -84,7 +84,7 @@ cp ../backend/.env.example ../backend/.env   # fill it in
 docker compose up -d --build
 ```
 
-## Mobile app — Volt
+## Mobile app — Amp
 
 `mobile/` is an Expo (React Native + TypeScript) chat client. Design language:
 an instrument cluster, not a messenger — a live telemetry strip up top
