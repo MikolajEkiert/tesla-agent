@@ -11,6 +11,10 @@ KEY=$2
 
 echo "🚀 Deploying to $IP..."
 
+echo "🏗️  Building the PWA (deploy/Dockerfile.web ships the pre-built dist/,
+     it doesn't build it on the server)..."
+( cd mobile && npx expo export -p web ) || { echo "PWA build failed — aborting deploy."; exit 1; }
+
 echo "📦 Copying files to server..."
 rsync -avz -e "ssh -i $KEY -o StrictHostKeyChecking=accept-new" \
     --exclude 'node_modules' \
