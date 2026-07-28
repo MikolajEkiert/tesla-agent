@@ -14,9 +14,13 @@ services:
     expose:
       - "8000"
     restart: unless-stopped
-    # For the fleet adapter, mount your generated keys:
     volumes:
+      # For the fleet adapter, mount your generated keys:
       - ../backend/keys:/app/keys:ro
+      # tesla_tokens.db lives here (see app/auth/oauth.py) — without this
+      # mount it's in the container's writable layer and every redeploy
+      # (which recreates the container) wipes it, forcing Tesla re-login.
+      - ../backend/data:/app/data
 
   frontend:
     build:
