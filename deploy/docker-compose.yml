@@ -4,7 +4,7 @@
 #   tesla-proxy  - Tesla's Go vehicle-command signing proxy (only needed for the
 #                  fleet adapter; harmless to leave running while on mock)
 #
-# For a $0 setup, point a free DuckDNS subdomain (e.g. volt.duckdns.org) at the
+# For a $0 setup, point a free DuckDNS subdomain (e.g. amp.duckdns.org) at the
 # VM's public IP, then set DOMAIN below. Caddy gets a real cert automatically.
 
 services:
@@ -15,8 +15,16 @@ services:
       - "8000"
     restart: unless-stopped
     # For the fleet adapter, mount your generated keys:
-    # volumes:
-    #   - ./keys:/app/keys:ro
+    volumes:
+      - ../backend/keys:/app/keys:ro
+
+  frontend:
+    build:
+      context: ../mobile
+      dockerfile: ../deploy/Dockerfile.web
+    expose:
+      - "80"
+    restart: unless-stopped
 
   caddy:
     image: caddy:2
@@ -29,22 +37,25 @@ services:
       - caddy_config:/config
     depends_on:
       - api
+      - frontend
     restart: unless-stopped
 
   # Tesla's official signing proxy. Uncomment when you switch to the fleet adapter.
   # Build from https://github.com/teslamotors/vehicle-command (tesla-http-proxy),
   # or use a prebuilt image. It signs commands with your enrolled virtual key.
-  # tesla-proxy:
-  #   image: tesla-http-proxy:latest
-  #   command: >
-  #     -tls-key /certs/proxy-key.pem -cert /certs/proxy-cert.pem
-  #     -key-file /keys/private-key.pem -port 4443 -verbose
-  #   volumes:
-  #     - ./keys:/keys:ro
-  #     - ./certs:/certs:ro
-  #   expose:
-  #     - "4443"
-  #   restart: unless-stopped
+  tesla-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+    command: >
+      -tls-key /certs/proxy-key.pem -cert /certs/proxy-cert.pem
+      -key-file /keys/private-key.pem -port 4443 -verbose
+    volumes:
+      - ./keys:/keys:ro
+      - ./certs:/certs:ro
+    expose:
+      - "4443"
+    restart: unless-stopped
 
 volumes:
   caddy_data:

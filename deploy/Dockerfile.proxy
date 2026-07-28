@@ -1,0 +1,9 @@
+FROM golang:1.23-alpine AS builder
+WORKDIR /app
+RUN apk add --no-cache git
+RUN git clone https://github.com/teslamotors/vehicle-command.git .
+RUN go build -o /tesla-http-proxy ./cmd/tesla-http-proxy
+
+FROM alpine:latest
+COPY --from=builder /tesla-http-proxy /usr/local/bin/tesla-http-proxy
+ENTRYPOINT ["tesla-http-proxy"]
