@@ -26,6 +26,7 @@ rsync -avz -e "ssh -i $KEY -o StrictHostKeyChecking=accept-new" \
     --exclude 'mobile/.expo' \
     --exclude 'backend/.venv' \
     --exclude '__pycache__' \
+    --exclude 'backend/data' \
     ./ ubuntu@$IP:~/tesla-agent/
 
 echo "🐳 Installing Docker on server and starting the app (this might take a minute)..."
