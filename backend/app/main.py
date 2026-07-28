@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
@@ -54,7 +54,15 @@ async def health() -> dict[str, str]:
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
-    result = await orchestrator.chat(req.message, req.history)
+    try:
+        result = await orchestrator.chat(req.message, req.history)
+    except Exception as e:
+        # Without this, any downstream failure (LLM rate limit, LLM outage,
+        # a bad tool call) surfaces as FastAPI's generic, bodyless 500 —
+        # indistinguishable from the backend actually being down. str(e) is
+        # the LLM SDK's own message (e.g. Gemini's quota-exceeded text),
+        # which is specific enough to act on without leaking secrets.
+        raise HTTPException(status_code=502, detail=str(e))
     return ChatResponse(**result)
 
 

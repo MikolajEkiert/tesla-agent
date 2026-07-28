@@ -8,7 +8,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { fetchVehicleState, sendMessage } from "../api";
+import { BackendError, fetchVehicleState, sendMessage } from "../api";
 import { ChatInput } from "../components/ChatInput";
 import { InstrumentStrip } from "../components/InstrumentStrip";
 import { MessageRow } from "../components/MessageRow";
@@ -71,8 +71,13 @@ export function ChatScreen({
           { kind: "message", id: id(), role: "assistant", text: res.reply },
         ]);
         refreshVehicle();
-      } catch {
-        setError("Couldn't reach Amp's backend. Is it running?");
+      } catch (e) {
+        // BackendError means the backend responded — show its actual reason
+        // (e.g. an LLM rate limit). Anything else is a real connectivity
+        // failure (fetch never got a response at all).
+        setError(
+          e instanceof BackendError ? e.message : "Couldn't reach Amp's backend. Is it running?"
+        );
       } finally {
         setPending(false);
       }

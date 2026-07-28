@@ -17,6 +17,26 @@ const DEFAULT_BASE_URL =
     ? "http://10.0.2.2:8000"
     : "http://localhost:8000");
 
+/**
+ * Thrown only when the backend actually responded with an error (a real
+ * HTTP status, not a network failure) — e.g. an LLM rate limit or a bad
+ * tool call. `fetch()` itself throwing a plain (non-Backend) error means
+ * the request never reached the backend at all. Callers use this
+ * distinction to show "here's what went wrong" vs. "is the backend even
+ * running?" instead of collapsing both into the same generic message.
+ */
+export class BackendError extends Error {}
+
+async function errorDetail(res: Response): Promise<string> {
+  try {
+    const body = await res.json();
+    if (typeof body?.detail === "string") return body.detail;
+  } catch {
+    // Not a JSON body (e.g. a raw 404/502 from Caddy/nginx) — fall through.
+  }
+  return `Backend returned ${res.status}`;
+}
+
 export async function sendMessage(
   message: string,
   history: Record<string, unknown>[]
@@ -27,7 +47,7 @@ export async function sendMessage(
     body: JSON.stringify({ message, history }),
   });
   if (!res.ok) {
-    throw new Error(`Backend returned ${res.status}`);
+    throw new BackendError(await errorDetail(res));
   }
   return res.json();
 }
@@ -35,7 +55,7 @@ export async function sendMessage(
 export async function fetchVehicleState(): Promise<VehicleState> {
   const res = await fetch(`${DEFAULT_BASE_URL}/vehicle/state`);
   if (!res.ok) {
-    throw new Error(`Backend returned ${res.status}`);
+    throw new BackendError(await errorDetail(res));
   }
   return res.json();
 }
@@ -43,7 +63,7 @@ export async function fetchVehicleState(): Promise<VehicleState> {
 export async function fetchAuthStatus(): Promise<AuthStatus> {
   const res = await fetch(`${DEFAULT_BASE_URL}/auth/status`);
   if (!res.ok) {
-    throw new Error(`Backend returned ${res.status}`);
+    throw new BackendError(await errorDetail(res));
   }
   return res.json();
 }
@@ -51,7 +71,7 @@ export async function fetchAuthStatus(): Promise<AuthStatus> {
 export async function disconnectTesla(): Promise<void> {
   const res = await fetch(`${DEFAULT_BASE_URL}/auth/disconnect`, { method: "POST" });
   if (!res.ok) {
-    throw new Error(`Backend returned ${res.status}`);
+    throw new BackendError(await errorDetail(res));
   }
 }
 
