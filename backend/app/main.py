@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 
-from app import actions, scheduler, voice
+from app import actions, scheduler, tts, voice
 from app.auth import gate, passkey
 from app.config import get_settings
 from app.llm import build_orchestrator
@@ -378,6 +378,49 @@ async def voice_transcribe(request: Request, language: str | None = None) -> dic
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
     return {"text": text}
+
+
+class VoiceSpeakRequest(BaseModel):
+    text: str
+    language: str | None = None
+    voice: str | None = None
+
+
+@app.post("/voice/speak")
+async def voice_speak(req: VoiceSpeakRequest) -> Response:
+    """Text in, a WAV out. The reply the app just received, made audible.
+
+    Behind the session gate and deliberately *not* in TOKEN_ROUTES: the
+    Shortcut speaks with the phone's own voice, and giving a token holder a
+    route that spends API quota per call would hand a stranger standing next to
+    your phone a way to run up the bill.
+
+    Every failure is a 503, including a rate limit, because the client's
+    response to all of them is the same — read the reply with the built-in
+    voice instead. The distinction that matters here is "did you get audio",
+    not why not.
+    """
+    try:
+        audio = await tts.synthesize(req.text, req.language, req.voice)
+    except tts.SpeechError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return Response(
+        content=audio,
+        media_type="audio/wav",
+        # The same reply is often spoken twice (asked again, or replayed), and
+        # a reply is derived entirely from its text, so letting the browser
+        # keep it briefly saves a quota slot on the free tier.
+        headers={"cache-control": "private, max-age=300"},
+    )
+
+
+@app.get("/voice/voices")
+async def voice_voices() -> dict[str, Any]:
+    """What the settings screen offers. Served rather than hardcoded in the app
+    so the allow-list has exactly one home — the one the synthesiser checks."""
+    return {"voices": sorted(tts.VOICES), "default": tts.DEFAULT_VOICE}
 
 
 class VoiceAskRequest(BaseModel):
