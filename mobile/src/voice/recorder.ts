@@ -80,6 +80,22 @@ function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
+/**
+ * Stop listening on its own once the speaker has clearly finished, instead of
+ * waiting for a finger to lift.
+ *
+ * A single peak threshold is not enough by itself — silence *before* any
+ * speech is just "hasn't started yet", not "done talking" — so this only
+ * starts the silence clock once a frame has actually crossed the threshold.
+ */
+export interface Endpointing {
+  /** Peak level, 0..1, that counts as speech rather than road noise. */
+  speechThreshold: number;
+  /** How long a hush has to hold, after speech was heard, before it reads as
+   *  a finished sentence rather than a breath between words. */
+  silenceMs: number;
+}
+
 export class VoiceRecorder {
   private stream: MediaStream | null = null;
   private context: AudioContext | null = null;
@@ -88,14 +104,21 @@ export class VoiceRecorder {
   private chunks: Float32Array[] = [];
   private frames = 0;
   private stopping = false;
+  private hasSpeech = false;
+  private lastVoiceAt = 0;
+
+  /** Set before start(). Unset, the recorder only ever stops on release or
+   *  MAX_SECONDS, which is the existing hold-to-talk behaviour. */
+  endpointing?: Endpointing;
 
   /** Peak level of the most recent frame, 0..1 — drives the "it's hearing
    *  you" affordance, which is the difference between a dead button and a
    *  silent one. */
   onLevel?: (level: number) => void;
 
-  /** Fired when MAX_SECONDS is hit, so the UI can settle rather than record
-   *  into a void the server will reject anyway. */
+  /** Fired when the recording ends itself — MAX_SECONDS, or endpointing
+   *  silence — rather than by a caller releasing it. The UI treats both the
+   *  same way: stop showing "listening" and move on. */
   onAutoStop?: () => void;
 
   async start(): Promise<void> {
@@ -118,6 +141,8 @@ export class VoiceRecorder {
     this.chunks = [];
     this.frames = 0;
     this.stopping = false;
+    this.hasSpeech = false;
+    this.lastVoiceAt = 0;
     this.source = this.context!.createMediaStreamSource(this.stream);
     this.node = await this.buildNode();
     this.source.connect(this.node);
@@ -153,10 +178,20 @@ export class VoiceRecorder {
     this.chunks.push(frame);
     this.frames += frame.length;
 
-    if (this.onLevel) {
-      let peak = 0;
-      for (let i = 0; i < frame.length; i++) peak = Math.max(peak, Math.abs(frame[i]));
-      this.onLevel(peak);
+    let peak = 0;
+    for (let i = 0; i < frame.length; i++) peak = Math.max(peak, Math.abs(frame[i]));
+    this.onLevel?.(peak);
+
+    if (this.endpointing) {
+      const now = Date.now();
+      if (peak >= this.endpointing.speechThreshold) {
+        this.hasSpeech = true;
+        this.lastVoiceAt = now;
+      } else if (this.hasSpeech && now - this.lastVoiceAt >= this.endpointing.silenceMs) {
+        this.stopping = true;
+        this.onAutoStop?.();
+        return;
+      }
     }
 
     const rate = this.context?.sampleRate ?? SAMPLE_RATE;

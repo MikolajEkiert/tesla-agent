@@ -98,6 +98,11 @@ const STRINGS = {
     speechVoiceSample:
       "The car has sixty-three percent battery, two hundred and ten kilometres of range. Nearest Supercharger is four kilometres away.",
     speechVoiceFallback: "Phone voice used — {reason}",
+    conversationStart: "Start voice conversation",
+    conversationListening: "Listening…",
+    conversationThinking: "Thinking…",
+    conversationSpeaking: "Speaking — tap to interrupt",
+    conversationEnd: "End conversation",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -191,6 +196,11 @@ const STRINGS = {
     speechVoiceSample:
       "Auto ma sześćdziesiąt trzy procent baterii, zasięg dwieście dziesięć kilometrów. Najbliższy Supercharger jest cztery kilometry stąd.",
     speechVoiceFallback: "Zadziałał głos telefonu — {reason}",
+    conversationStart: "Rozpocznij rozmowę głosową",
+    conversationListening: "Słucham…",
+    conversationThinking: "Myślę…",
+    conversationSpeaking: "Mówię — dotknij, aby przerwać",
+    conversationEnd: "Zakończ rozmowę",
   },
 } as const;
 

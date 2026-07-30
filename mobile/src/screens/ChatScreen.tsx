@@ -16,8 +16,10 @@ import {
   lock,
   NotUnlockedError,
   sendMessage,
+  transcribe,
 } from "../api";
 import { ChatInput } from "../components/ChatInput";
+import type { ConversationPhase } from "../components/ConversationBar";
 import { InstrumentStrip } from "../components/InstrumentStrip";
 import { ConfirmCard } from "../components/ConfirmCard";
 import { MessageRow } from "../components/MessageRow";
@@ -34,6 +36,7 @@ import {
   isSpeaking,
   loadSpeechMode,
   loadVoiceChoice,
+  primeSpeech,
   saveSpeechMode,
   saveVoiceChoice,
   setActiveVoice,
@@ -42,7 +45,18 @@ import {
   type SpeechMode,
   type VoiceChoice,
 } from "../voice/speak";
+import { NothingRecordedError, VoiceRecorder, voiceInputSupported } from "../voice/recorder";
 import type { ChatItem, ScheduledAction, VehicleState } from "../types";
+
+/** How long a hush has to hold, once the driver has started talking, before a
+ *  conversation turn is treated as finished. Long enough to survive an
+ *  ordinary breath mid-sentence, short enough that the assistant doesn't feel
+ *  like it stopped listening. */
+const CONVERSATION_SILENCE_MS = 1100;
+
+/** Below this a frame counts as road noise, not the start of an answer. Well
+ *  above the 0.005 the recorder itself treats as "recorded nothing at all". */
+const CONVERSATION_SPEECH_THRESHOLD = 0.02;
 
 /** Countdowns in the drawer would otherwise sit frozen while it's open. */
 const QUEUE_POLL_MS = 15000;
@@ -81,6 +95,23 @@ export function ChatScreen({
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatItem>>(null);
 
+  // A continuous voice exchange: listen, send, hear the reply, listen again —
+  // until the driver ends it. See handleConversationTap and startConversation
+  // below for the actual loop; these hold the state the bar renders.
+  const [conversationActive, setConversationActive] = useState(false);
+  const [conversationPhase, setConversationPhase] = useState<ConversationPhase>("listening");
+  const [conversationLevel, setConversationLevel] = useState(0);
+  // Mirrors conversationActive for code that runs outside React's render
+  // cycle — a recorder's onAutoStop, a speak() callback fired seconds later —
+  // where state from the render that scheduled it may already be stale.
+  const conversationActiveRef = useRef(false);
+  const conversationRecorderRef = useRef<VoiceRecorder | null>(null);
+  // Indirection so handleSend's useCallback deps don't have to include
+  // functions that are themselves redefined every render (and that in turn
+  // call handleSend) — that pair would otherwise be circular.
+  const listenAgainRef = useRef<() => void>(() => {});
+  const stopConversationRef = useRef<() => void>(() => {});
+
   const refreshVehicle = useCallback(() => {
     fetchVehicleState()
       .then(setVehicle)
@@ -110,8 +141,12 @@ export function ChatScreen({
       setActiveVoice(choice);
     });
     // Leaving the screen mid-sentence should not leave a voice talking to an
-    // empty room — the synthesiser outlives the component otherwise.
-    return stopSpeaking;
+    // empty room — the synthesiser outlives the component otherwise. Same
+    // reasoning for a conversation's open microphone.
+    return () => {
+      stopSpeaking();
+      conversationRecorderRef.current?.cancel();
+    };
   }, [refreshVehicle, refreshScheduled]);
 
   /** Silence it and settle the UI. Every route to "stop talking" goes through
@@ -190,12 +225,13 @@ export function ChatScreen({
   }, [language, justConnected, t]);
 
   const handleSend = useCallback(
-    async (text: string, viaVoice?: boolean) => {
+    async (text: string, viaVoice?: boolean, conversationTurn?: boolean) => {
       setError(null);
       // Asking something new retires the previous answer, spoken one included.
       halt();
       setItems((prev) => [...prev, { kind: "message", id: id(), role: "user", text }]);
       setPending(true);
+      if (conversationTurn) setConversationPhase("thinking");
       try {
         const res = await sendMessage(text, history, language);
         setHistory(res.history);
@@ -227,13 +263,24 @@ export function ChatScreen({
         // pending confirmation as if it were the outcome. The model is already
         // told to say that something is waiting in the app (see
         // actions.propose), so that sentence is what gets read out.
-        if (speechMode === "always" || (speechMode === "voice" && viaVoice)) {
+        //
+        // A conversation turn speaks regardless of the stored speech mode: a
+        // voice conversation with a silent assistant makes no sense, and the
+        // silence would also strand the loop with nothing to cue the next
+        // listen.
+        if (conversationTurn || speechMode === "always" || (speechMode === "voice" && viaVoice)) {
           // Optimistic, not event-driven: the stop control has to exist from
           // the instant speech is asked for. Waiting for a start event would
           // leave the first moments unstoppable, and some engines never send
           // one at all. The watchdog below clears it either way.
           setSpeaking(true);
-          speak(res.reply, language, { onEnd: () => setSpeaking(false) });
+          if (conversationTurn) setConversationPhase("speaking");
+          speak(res.reply, language, {
+            onEnd: () => {
+              setSpeaking(false);
+              if (conversationTurn) listenAgainRef.current();
+            },
+          });
         }
         refreshVehicle();
         // A turn may have created or cancelled a timer — reflect it at once
@@ -248,6 +295,10 @@ export function ChatScreen({
         } else {
           setError(e instanceof BackendError ? e.message : t("errorUnreachable"));
         }
+        // A turn that failed to even get an answer has nothing to loop back
+        // to — end the conversation instead of sitting in "thinking" forever
+        // or, worse, silently retrying into a server that is already down.
+        if (conversationTurn) stopConversationRef.current();
       } finally {
         setPending(false);
       }
@@ -276,6 +327,111 @@ export function ChatScreen({
   const activeActions = scheduled.filter(
     (a) => a.state === "scheduled" || a.state === "running"
   );
+
+  // --- Conversation mode -----------------------------------------------
+  //
+  // Not memoized with useCallback: these four call each other (listenAgain
+  // schedules finishConversationTurn, which calls handleSend, whose onEnd
+  // calls back into listenAgain via listenAgainRef), and none of them are
+  // passed anywhere that needs referential stability across renders — only
+  // invoked from event handlers and from refs that are reassigned every
+  // render to whichever closure is current. Plain functions sidestep the
+  // circular-dependency problem a useCallback chain here would otherwise have.
+
+  const stopConversation = () => {
+    conversationActiveRef.current = false;
+    setConversationActive(false);
+    conversationRecorderRef.current?.cancel();
+    conversationRecorderRef.current = null;
+    halt();
+  };
+  stopConversationRef.current = stopConversation;
+
+  const listenAgain = () => {
+    // Guards against the same turn being started twice — the real case is a
+    // barge-in tap and a cancelled utterance's stray onend both trying to
+    // reopen the microphone for the same moment. Whichever gets here first
+    // sets the ref; the second sees it already populated and backs off.
+    if (!conversationActiveRef.current || conversationRecorderRef.current) return;
+    setConversationPhase("listening");
+    setConversationLevel(0);
+    const recorder = new VoiceRecorder();
+    recorder.endpointing = {
+      speechThreshold: CONVERSATION_SPEECH_THRESHOLD,
+      silenceMs: CONVERSATION_SILENCE_MS,
+    };
+    recorder.onLevel = setConversationLevel;
+    recorder.onAutoStop = () => void finishConversationTurn();
+    conversationRecorderRef.current = recorder;
+    recorder.start().catch(() => {
+      // Permission revoked mid-conversation, or the device took the mic away
+      // (a phone call arriving). Nothing left to listen with.
+      conversationRecorderRef.current = null;
+      stopConversation();
+    });
+  };
+  listenAgainRef.current = listenAgain;
+
+  const finishConversationTurn = async () => {
+    const recorder = conversationRecorderRef.current;
+    if (!recorder) return;
+    conversationRecorderRef.current = null;
+    setConversationPhase("thinking");
+    try {
+      const blob = await recorder.stop();
+      const text = (await transcribe(blob, language)).trim();
+      if (!text) {
+        // Endpointing fired but the transcript came back empty — a cough, a
+        // door closing. Not a reason to end the conversation, just to listen
+        // again.
+        listenAgain();
+        return;
+      }
+      await handleSend(text, true, true);
+    } catch (e) {
+      if (e instanceof NothingRecordedError) {
+        // Silence the whole turn, or a recording too short to be speech —
+        // ordinary in a car (a red light, a thought interrupted). Keep going.
+        listenAgain();
+      } else if (e instanceof NotUnlockedError) {
+        stopConversation();
+        onLocked?.();
+      } else {
+        // Transcription itself failed (quota, no signal) — stop rather than
+        // spin through the same failure every couple of seconds.
+        stopConversation();
+      }
+    }
+  };
+
+  const startConversation = () => {
+    if (!voiceInputSupported() || conversationActiveRef.current) return;
+    setError(null);
+    // Still inside the tap, which is the only moment iOS lets us unlock
+    // speech — every later turn in the loop plays without one.
+    primeSpeech();
+    conversationActiveRef.current = true;
+    setConversationActive(true);
+    listenAgain();
+  };
+
+  const handleConversationTap = () => {
+    if (conversationPhase === "listening") {
+      // Don't make the driver wait out the silence timer once they know
+      // they're done — the same "release early" affordance hold-to-talk
+      // gives for free by construction.
+      void finishConversationTurn();
+    } else if (conversationPhase === "speaking") {
+      // The nearest thing to talking over it this architecture can offer: no
+      // echo cancellation across an arbitrary car speaker means the mic can't
+      // safely stay open *while* the reply plays, so a tap stands in for a
+      // voice that would otherwise go undetected.
+      halt();
+      listenAgain();
+    }
+    // "thinking": nothing to interrupt yet.
+  };
+  // --- end conversation mode ---------------------------------------------
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
@@ -328,6 +484,12 @@ export function ChatScreen({
           onLocked={onLocked}
           speaking={speaking}
           onStopSpeaking={halt}
+          conversationActive={conversationActive}
+          conversationPhase={conversationPhase}
+          conversationLevel={conversationLevel}
+          onStartConversation={startConversation}
+          onConversationTap={handleConversationTap}
+          onEndConversation={stopConversation}
         />
       </KeyboardAvoidingView>
 
@@ -342,7 +504,10 @@ export function ChatScreen({
         }}
         onLock={() => {
           setMenuOpen(false);
-          halt();
+          // Stops the conversation's open microphone too, not just any
+          // speech — a locked app listening in the background would be a
+          // strange thing to discover.
+          stopConversation();
           lock().finally(() => onLocked?.());
         }}
       />

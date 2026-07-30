@@ -10,6 +10,8 @@ import {
 import { useLanguage } from "../LanguageContext";
 import { color, font, radius, space } from "../theme";
 import { primeSpeech } from "../voice/speak";
+import { voiceInputSupported } from "../voice/recorder";
+import { ConversationBar, ConversationButton, type ConversationPhase } from "./ConversationBar";
 import { VoiceButton } from "./VoiceButton";
 
 export function ChatInput({
@@ -18,6 +20,12 @@ export function ChatInput({
   onLocked,
   speaking,
   onStopSpeaking,
+  conversationActive,
+  conversationPhase,
+  conversationLevel,
+  onStartConversation,
+  onConversationTap,
+  onEndConversation,
 }: {
   /** `viaVoice` decides whether the reply gets read aloud — see SpeechMode. */
   onSend: (text: string, viaVoice?: boolean) => void;
@@ -25,6 +33,12 @@ export function ChatInput({
   onLocked?: () => void;
   speaking?: boolean;
   onStopSpeaking?: () => void;
+  conversationActive?: boolean;
+  conversationPhase?: ConversationPhase;
+  conversationLevel?: number;
+  onStartConversation?: () => void;
+  onConversationTap?: () => void;
+  onEndConversation?: () => void;
 }) {
   const { t } = useLanguage();
   const [text, setText] = useState("");
@@ -40,6 +54,22 @@ export function ChatInput({
     onSend(text.trim());
     setText("");
   };
+
+  // A running conversation takes over the whole bar: the text field, the send
+  // button and the ordinary voice button all mean nothing while the mic is
+  // already open and driving the exchange on its own.
+  if (conversationActive) {
+    return (
+      <View style={styles.container}>
+        <ConversationBar
+          phase={conversationPhase ?? "listening"}
+          level={conversationLevel ?? 0}
+          onTap={() => onConversationTap?.()}
+          onEnd={() => onEndConversation?.()}
+        />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -84,12 +114,17 @@ export function ChatInput({
             <Text style={styles.sendGlyph}>↑</Text>
           </Pressable>
         ) : (
-          <VoiceButton
-            onTranscript={(spoken) => onSend(spoken, true)}
-            onStatus={setVoiceStatus}
-            onLocked={onLocked}
-            disabled={disabled}
-          />
+          <>
+            <VoiceButton
+              onTranscript={(spoken) => onSend(spoken, true)}
+              onStatus={setVoiceStatus}
+              onLocked={onLocked}
+              disabled={disabled}
+            />
+            {voiceInputSupported() && (
+              <ConversationButton onPress={() => onStartConversation?.()} disabled={disabled} />
+            )}
+          </>
         )}
       </View>
     </View>

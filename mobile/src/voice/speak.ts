@@ -288,7 +288,7 @@ export function speak(text: string, language: Language, handlers?: SpeechHandler
   // on iOS will not play — so the built-in voice is not merely the fallback
   // here, it is the only one that can make a sound.
   if (voiceChoice === "device" || !player) {
-    speakWithDevice(spoken, language, handlers);
+    speakWithDevice(spoken, language, handlers, mine);
     return;
   }
 
@@ -308,7 +308,7 @@ export function speak(text: string, language: Language, handlers?: SpeechHandler
       // other voice; the user hears a slightly worse assistant, not a broken
       // one. The reason is handed over for anyone who asked to be told.
       handlers?.onFallback?.(reasonOf(e));
-      speakWithDevice(spoken, language, handlers);
+      speakWithDevice(spoken, language, handlers, mine);
     });
 }
 
@@ -327,7 +327,7 @@ function playFile(
   handlers?: SpeechHandlers
 ): void {
   if (!player) {
-    speakWithDevice(spoken, language, handlers);
+    speakWithDevice(spoken, language, handlers, mine);
     return;
   }
   try {
@@ -352,14 +352,19 @@ function playFile(
       // Refused before a single sample was heard — nothing was said yet, so
       // the fallback can say all of it.
       handlers?.onFallback?.(reasonOf(e));
-      speakWithDevice(spoken, language, handlers);
+      speakWithDevice(spoken, language, handlers, mine);
     });
   } catch {
-    speakWithDevice(spoken, language, handlers);
+    speakWithDevice(spoken, language, handlers, mine);
   }
 }
 
-function speakWithDevice(spoken: string, language: Language, handlers?: SpeechHandlers): void {
+function speakWithDevice(
+  spoken: string,
+  language: Language,
+  handlers: SpeechHandlers | undefined,
+  mine: number
+): void {
   if (!speechSupported()) {
     handlers?.onEnd?.();
     return;
@@ -376,9 +381,17 @@ function speakWithDevice(spoken: string, language: Language, handlers?: SpeechHa
     // Browsers disagree about which event a cancel() produces — some fire
     // `end`, some `error`, Safari has managed both. Collapsing them into one
     // guarded call means the UI settles either way, and never twice.
+    //
+    // The generation check is the part that actually matters: stopSpeaking()
+    // cancels this utterance from the outside but has no reference to detach
+    // its handlers (unlike the <audio> element, which it nulls out directly),
+    // so a stale onend can still fire here for a reply nobody asked about any
+    // more. Conversation mode turns that into a real bug rather than a no-op:
+    // its onEnd starts listening again, and a cancelled reply from two
+    // questions ago has no business restarting the microphone.
     let finished = false;
     const finish = () => {
-      if (finished) return;
+      if (finished || mine !== generation) return;
       finished = true;
       handlers?.onEnd?.();
     };
@@ -388,7 +401,7 @@ function speakWithDevice(spoken: string, language: Language, handlers?: SpeechHa
     window.speechSynthesis.speak(utterance);
   } catch {
     // A silent assistant is an acceptable degradation; a crashed one is not.
-    handlers?.onEnd?.();
+    if (mine === generation) handlers?.onEnd?.();
   }
 }
 
