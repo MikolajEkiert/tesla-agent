@@ -29,6 +29,14 @@ const MAX_SPOKEN_CHARS = 600;
 
 const LOCALE: Record<Language, string> = { pl: "pl-PL", en: "en-US" };
 
+/**
+ * The platform default reads noticeably slower than a person speaking, which
+ * makes even a one-sentence answer feel like waiting. Slightly above 1 is
+ * brisk without turning into a chipmunk; past about 1.3 the compact voices
+ * start slurring.
+ */
+const SPEECH_RATE = 1.15;
+
 export function speechSupported(): boolean {
   return (
     Platform.OS === "web" &&
@@ -71,10 +79,31 @@ if (speechSupported()) {
   window.speechSynthesis.addEventListener?.("voiceschanged", refreshVoices);
 }
 
+/**
+ * The default Polish voice on a fresh phone is the compact one, and it sounds
+ * it. iOS can download a far better version of the same voice for free
+ * (Settings → Accessibility → Spoken Content → Voices), and once it is there
+ * it simply shows up in this list — labelled "Enhanced" or "Premium" — so
+ * preferring it costs nothing and needs no setting in the app.
+ *
+ * Local voices come second: they are offline and start instantly, where a
+ * network voice can stall mid-sentence on a bad signal, which in a car is
+ * exactly when it is least welcome.
+ */
 function pickVoice(locale: string): SpeechSynthesisVoice | undefined {
   if (!voices.length) refreshVoices();
   const prefix = locale.slice(0, 2).toLowerCase();
-  return voices.find((v) => v.lang?.toLowerCase().startsWith(prefix));
+  const matching = voices.filter((v) => v.lang?.toLowerCase().startsWith(prefix));
+  return (
+    matching.find((v) => /enhanced|premium|neural/i.test(v.name)) ??
+    matching.find((v) => v.localService) ??
+    matching[0]
+  );
+}
+
+/** The best-quality voice actually available, for reporting in Settings. */
+export function currentVoiceName(language: Language): string | null {
+  return pickVoice(LOCALE[language] ?? LOCALE.en)?.name ?? null;
 }
 
 let primed = false;
@@ -99,7 +128,22 @@ export function primeSpeech(): void {
   }
 }
 
-export function speak(text: string, language: Language): void {
+/** Notified when speech stops for any reason at all — finished, cancelled or
+ *  failed. Deliberately no `onStart`: the caller shows its stop control the
+ *  moment it asks for speech, rather than waiting for an event that some
+ *  engines never send (measured: a browser with no audio device reports
+ *  `speaking === true` and fires nothing at all). */
+export interface SpeechHandlers {
+  onEnd?: () => void;
+}
+
+/** Ground truth, for callers that cannot rely on the end event arriving. */
+export function isSpeaking(): boolean {
+  if (!speechSupported()) return false;
+  return window.speechSynthesis.speaking || window.speechSynthesis.pending;
+}
+
+export function speak(text: string, language: Language, handlers?: SpeechHandlers): void {
   if (!speechSupported()) return;
   const spoken = text.trim().slice(0, MAX_SPOKEN_CHARS);
   if (!spoken) return;
@@ -108,11 +152,26 @@ export function speak(text: string, language: Language): void {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(spoken);
     utterance.lang = LOCALE[language] ?? LOCALE.en;
+    utterance.rate = SPEECH_RATE;
     const voice = pickVoice(utterance.lang);
     if (voice) utterance.voice = voice;
+
+    // Browsers disagree about which event a cancel() produces — some fire
+    // `end`, some `error`, Safari has managed both. Collapsing them into one
+    // guarded call means the UI settles either way, and never twice.
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      handlers?.onEnd?.();
+    };
+    utterance.onend = finish;
+    utterance.onerror = finish;
+
     window.speechSynthesis.speak(utterance);
   } catch {
     // A silent assistant is an acceptable degradation; a crashed one is not.
+    handlers?.onEnd?.();
   }
 }
 

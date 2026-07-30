@@ -20,7 +20,7 @@ import {
 import { useLanguage } from "../LanguageContext";
 import type { Language, TranslationKey } from "../i18n";
 import { color, font, radius, space } from "../theme";
-import { speechSupported, type SpeechMode } from "../voice/speak";
+import { currentVoiceName, speechSupported, type SpeechMode } from "../voice/speak";
 
 const LANGUAGES: { code: Language; labelKey: "langEnglish" | "langPolish" }[] = [
   { code: "en", labelKey: "langEnglish" },
@@ -43,6 +43,14 @@ export function SettingsScreen({
   onSpeechModeChange: (mode: SpeechMode) => void;
 }) {
   const { language, setLanguage, t } = useLanguage();
+  // Safari fills the voice list asynchronously, so this can be null on the
+  // first render and correct a moment later.
+  const [voiceName, setVoiceName] = useState<string | null>(null);
+  useEffect(() => {
+    setVoiceName(currentVoiceName(language));
+    const timer = setTimeout(() => setVoiceName(currentVoiceName(language)), 400);
+    return () => clearTimeout(timer);
+  }, [language]);
   const [passkeys, setPasskeys] = useState<Passkey[]>([]);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
   const [passkeyError, setPasskeyError] = useState<string | null>(null);
@@ -130,6 +138,20 @@ export function SettingsScreen({
               })}
             </View>
             <Text style={styles.hint}>{t("speechHint")}</Text>
+            {speechMode !== "off" && (
+              <>
+                {voiceName && (
+                  <Text style={styles.voiceName}>
+                    {t("speechVoiceLabel", { name: voiceName })}
+                  </Text>
+                )}
+                {/* The stock Polish voice is the compact one and sounds like
+                    it. The better version is a free download in iOS Settings,
+                    and Amp switches to it by itself — so the only thing
+                    missing is knowing it exists. */}
+                <Text style={styles.hint}>{t("speechVoiceUpgrade")}</Text>
+              </>
+            )}
           </>
         )}
 
@@ -245,6 +267,12 @@ const styles = StyleSheet.create({
   },
   sectionGap: {
     marginTop: space.xl,
+  },
+  voiceName: {
+    fontFamily: font.mono,
+    fontSize: 12,
+    color: color.textSecondary,
+    marginTop: space.md,
   },
   enrolInput: {
     backgroundColor: color.surfaceRaised,

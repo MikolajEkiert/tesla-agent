@@ -86,6 +86,11 @@ const STRINGS = {
     speechAlways: "Always",
     speechHint:
       "Reads the assistant's reply aloud. \"After voice\" only speaks when you asked out loud — worth keeping, since the phone's voice plays even on silent.",
+    speechSpeaking: "Reading aloud",
+    speechStop: "Stop",
+    speechVoiceLabel: "Voice: {name}",
+    speechVoiceUpgrade:
+      "For a much better voice, download the enhanced Polish one: Settings → Accessibility → Spoken Content → Voices → Polish. It's free, and Amp picks it up on its own.",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -167,6 +172,11 @@ const STRINGS = {
     speechAlways: "Zawsze",
     speechHint:
       "Czyta odpowiedź asystenta na głos. „Po głosie” odzywa się tylko wtedy, gdy sam zapytałeś głosem — warto przy tym zostać, bo głos telefonu gra także przy wyciszeniu.",
+    speechSpeaking: "Czytam",
+    speechStop: "Zatrzymaj",
+    speechVoiceLabel: "Głos: {name}",
+    speechVoiceUpgrade:
+      "Po znacznie lepszy głos: Ustawienia → Dostępność → Treść mówiona → Głosy → Polski i pobierz wersję rozszerzoną. Jest darmowa, a Amp sam ją wybierze.",
   },
 } as const;
 

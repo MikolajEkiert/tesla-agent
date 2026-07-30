@@ -30,6 +30,7 @@ import { SettingsScreen } from "./SettingsScreen";
 import { color, font, space } from "../theme";
 import {
   DEFAULT_SPEECH_MODE,
+  isSpeaking,
   loadSpeechMode,
   saveSpeechMode,
   speak,
@@ -67,6 +68,7 @@ export function ChatScreen({
     },
   ]);
   const [speechMode, setSpeechMode] = useState<SpeechMode>(DEFAULT_SPEECH_MODE);
+  const [speaking, setSpeaking] = useState(false);
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
   const [vehicle, setVehicle] = useState<VehicleState | null>(null);
   const [pending, setPending] = useState(false);
@@ -100,11 +102,40 @@ export function ChatScreen({
     return stopSpeaking;
   }, [refreshVehicle, refreshScheduled]);
 
-  const changeSpeechMode = useCallback((mode: SpeechMode) => {
-    setSpeechMode(mode);
-    saveSpeechMode(mode);
-    if (mode === "off") stopSpeaking();
+  /** Silence it and settle the UI. Every route to "stop talking" goes through
+   *  here, so the stop button can never outlive the speech it belongs to. */
+  const halt = useCallback(() => {
+    stopSpeaking();
+    setSpeaking(false);
   }, []);
+
+  // The end event is not guaranteed — Safari has been known to drop it, and a
+  // browser with no audio device fires nothing while still reporting that it
+  // is speaking. Polling the engine means the stop button always disappears
+  // when there is nothing left to stop. The delay covers the opposite race:
+  // the engine takes a moment to report `speaking` after being handed work.
+  useEffect(() => {
+    if (!speaking) return;
+    let poll: ReturnType<typeof setInterval>;
+    const start = setTimeout(() => {
+      poll = setInterval(() => {
+        if (!isSpeaking()) setSpeaking(false);
+      }, 500);
+    }, 1000);
+    return () => {
+      clearTimeout(start);
+      clearInterval(poll);
+    };
+  }, [speaking]);
+
+  const changeSpeechMode = useCallback(
+    (mode: SpeechMode) => {
+      setSpeechMode(mode);
+      saveSpeechMode(mode);
+      if (mode === "off") halt();
+    },
+    [halt]
+  );
 
   // Timers tick down server-side, so the queue has to be re-read rather than
   // counted down locally — a stop job that already fired should stop showing
@@ -144,7 +175,7 @@ export function ChatScreen({
     async (text: string, viaVoice?: boolean) => {
       setError(null);
       // Asking something new retires the previous answer, spoken one included.
-      stopSpeaking();
+      halt();
       setItems((prev) => [...prev, { kind: "message", id: id(), role: "user", text }]);
       setPending(true);
       try {
@@ -179,7 +210,12 @@ export function ChatScreen({
         // told to say that something is waiting in the app (see
         // actions.propose), so that sentence is what gets read out.
         if (speechMode === "always" || (speechMode === "voice" && viaVoice)) {
-          speak(res.reply, language);
+          // Optimistic, not event-driven: the stop control has to exist from
+          // the instant speech is asked for. Waiting for a start event would
+          // leave the first moments unstoppable, and some engines never send
+          // one at all. The watchdog below clears it either way.
+          setSpeaking(true);
+          speak(res.reply, language, { onEnd: () => setSpeaking(false) });
         }
         refreshVehicle();
         // A turn may have created or cancelled a timer — reflect it at once
@@ -198,7 +234,7 @@ export function ChatScreen({
         setPending(false);
       }
     },
-    [history, refreshVehicle, refreshScheduled, language, t, onLocked, speechMode]
+    [history, refreshVehicle, refreshScheduled, language, t, onLocked, speechMode, halt]
   );
 
   useEffect(() => {
@@ -266,7 +302,13 @@ export function ChatScreen({
             <Text style={styles.errorText}>{error}</Text>
           </View>
         )}
-        <ChatInput onSend={handleSend} disabled={pending} onLocked={onLocked} />
+        <ChatInput
+          onSend={handleSend}
+          disabled={pending}
+          onLocked={onLocked}
+          speaking={speaking}
+          onStopSpeaking={halt}
+        />
       </KeyboardAvoidingView>
 
       <Sidebar
@@ -280,7 +322,7 @@ export function ChatScreen({
         }}
         onLock={() => {
           setMenuOpen(false);
-          stopSpeaking();
+          halt();
           lock().finally(() => onLocked?.());
         }}
       />

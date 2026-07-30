@@ -16,11 +16,15 @@ export function ChatInput({
   onSend,
   disabled,
   onLocked,
+  speaking,
+  onStopSpeaking,
 }: {
   /** `viaVoice` decides whether the reply gets read aloud — see SpeechMode. */
   onSend: (text: string, viaVoice?: boolean) => void;
   disabled: boolean;
   onLocked?: () => void;
+  speaking?: boolean;
+  onStopSpeaking?: () => void;
 }) {
   const { t } = useLanguage();
   const [text, setText] = useState("");
@@ -39,7 +43,18 @@ export function ChatInput({
 
   return (
     <View style={styles.container}>
-      {voiceStatus && <Text style={styles.voiceStatus}>{voiceStatus}</Text>}
+      {/* Sits above the bar rather than replacing the microphone, so the way to
+          shut it up never moves and never depends on what else is on screen.
+          Wide and short — it has to be hittable without looking. */}
+      {speaking && (
+        <Pressable onPress={onStopSpeaking} style={styles.stopBar}>
+          <View style={styles.stopGlyph} />
+          <Text style={styles.stopText}>
+            {t("speechSpeaking")} · {t("speechStop")}
+          </Text>
+        </Pressable>
+      )}
+      {voiceStatus && !speaking && <Text style={styles.voiceStatus}>{voiceStatus}</Text>}
       <View style={[styles.bar, focused && styles.barFocused]}>
         <TextInput
           value={text}
@@ -108,6 +123,29 @@ const styles = StyleSheet.create({
     color: color.textTertiary,
     paddingLeft: space.md,
     paddingBottom: space.xs,
+  },
+  stopBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: space.sm,
+    marginBottom: space.sm,
+    paddingVertical: space.sm,
+    borderRadius: radius.pill,
+    backgroundColor: color.surfaceRaised,
+    borderWidth: 1,
+    borderColor: color.brand,
+  },
+  stopGlyph: {
+    width: 10,
+    height: 10,
+    borderRadius: 2,
+    backgroundColor: color.brand,
+  },
+  stopText: {
+    fontFamily: font.bodySemiBold,
+    fontSize: 13,
+    color: color.brand,
   },
   input: {
     flex: 1,
