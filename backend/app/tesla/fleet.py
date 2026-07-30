@@ -21,6 +21,7 @@ car — reads never do.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Any
 
@@ -56,14 +57,37 @@ def _raise_for_status(r: httpx.Response, source: str) -> None:
     and the assistant guessed "the car is asleep"). Keep the body."""
     if r.is_success:
         return
-    detail = r.text.strip()
+    # The upstream body is attacker-influenceable and travels into the model's
+    # context via the tool-error path, so cap it hard and strip control
+    # characters rather than reflecting it verbatim.
+    detail = " ".join(r.text.split())[:200]
+    detail = "".join(ch for ch in detail if ch.isprintable())
     raise RuntimeError(
         f"{source} returned HTTP {r.status_code}"
-        + (f": {detail[:400]}" if detail else "")
+        + (f": {detail}" if detail else "")
     )
 
 
 MILES_TO_KM = 1.609344
+
+# The signing proxy presents a self-signed certificate; pin to it so the
+# channel carrying the Tesla bearer token is authenticated rather than blindly
+# trusted. Falls back to no verification only if the file is absent, which
+# would otherwise break every command on a fresh deploy.
+PROXY_CA: Any = os.getenv("TESLA_PROXY_CA", "/certs/proxy-cert.pem")
+if not os.path.exists(str(PROXY_CA)):
+    PROXY_CA = False
+
+# Third-party place names reach the model as tool results.
+MAX_LABEL_LEN = 120
+
+
+def _clean_label(text: Any) -> str | None:
+    if text is None:
+        return None
+    flat = " ".join(str(text).split())
+    flat = "".join(ch for ch in flat if ch.isprintable())
+    return flat[:MAX_LABEL_LEN] or None
 
 
 def _coords(location: dict[str, Any] | None) -> str | None:
@@ -92,7 +116,7 @@ def _normalize_chargers(data: dict[str, Any]) -> dict[str, Any]:
     for entry in data.get("superchargers", []) or []:
         sites.append(
             {
-                "name": entry.get("name"),
+                "name": _clean_label(entry.get("name")),
                 "type": "supercharger",
                 "distance_km": round(entry.get("distance_miles", 0) * MILES_TO_KM, 1),
                 "available_stalls": entry.get("available_stalls"),
@@ -104,7 +128,7 @@ def _normalize_chargers(data: dict[str, Any]) -> dict[str, Any]:
     for entry in data.get("destination_charging", []) or []:
         sites.append(
             {
-                "name": entry.get("name"),
+                "name": _clean_label(entry.get("name")),
                 "type": "destination",
                 "distance_km": round(entry.get("distance_miles", 0) * MILES_TO_KM, 1),
                 "navigate_to": _coords(entry.get("location")),
@@ -259,7 +283,12 @@ class FleetImpl:
         """Addressed by VIN, not the Fleet API id — the proxy rejects the
         latter outright (see _resolve_vehicle)."""
         vin = await self._vin()
-        async with httpx.AsyncClient(timeout=20, verify=False) as c:  # proxy uses a local cert
+        # Pinned to the proxy's own certificate rather than verify=False. The
+        # cert is self-signed (CN=tesla-proxy, issued by itself), so plain
+        # verification could never pass — but disabling it meant a live Tesla
+        # bearer token would be handed to whatever answered at
+        # TESLA_PROXY_URL, silently, if that setting were ever wrong.
+        async with httpx.AsyncClient(timeout=20, verify=PROXY_CA) as c:
             r = await c.post(
                 f"{self.settings.tesla_proxy_url}/api/1/vehicles/{vin}/command/{name}",
                 headers={"Authorization": f"Bearer {token}"},
@@ -467,7 +496,7 @@ class FleetImpl:
     async def get_location(self) -> dict[str, Any]:
         """Coordinates plus a street address."""
         lat, lon = await self._coordinates()
-        address = await reverse_geocode(lat, lon)
+        address = _clean_label(await reverse_geocode(lat, lon))
         return {
             "latitude": lat,
             "longitude": lon,
