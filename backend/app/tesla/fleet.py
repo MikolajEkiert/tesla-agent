@@ -391,10 +391,22 @@ class FleetImpl:
             "front_left": 0, "front_right": 1,
             "rear_left": 2, "rear_center": 4, "rear_right": 5,
         }
-        return await self._command(
-            "remote_seat_heater_request",
-            {"seat_position": seat_map[seat], "level": level},
-        )
+        payload = {"seat_position": seat_map[seat], "level": level}
+        result = await self._command("remote_seat_heater_request", payload)
+        # This one refuses with HTTP 200 and result: false rather than an
+        # error status, so _raise_for_status never sees it — the raw dict just
+        # travels on to the model, which is why the owner saw a literal Tesla
+        # reason string ("cabin comfort remote settings not enabled") instead
+        # of a fix. The actual requirement, confirmed against other Fleet API
+        # clients hitting the same thing: climate has to already be running.
+        # Turning it on and asking again once is the same quiet-recovery move
+        # _command already makes for a sleeping car — and climate is
+        # explicitly ungated and reversible (see BASE_SYSTEM_PROMPT's
+        # confirmation rules), so doing it without asking first stays in scope.
+        if not result.get("result") and "cabin comfort" in str(result.get("reason", "")).lower():
+            await self.start_climate()
+            result = await self._command("remote_seat_heater_request", payload)
+        return result
 
     async def media_control(self, action: str) -> dict[str, Any]:
         cmd = {
