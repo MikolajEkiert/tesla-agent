@@ -51,6 +51,24 @@ SEARCH_RADIUS_KM = 15
 MAX_RESULTS = 40
 
 
+# Free-text fields here come from OpenStreetMap and Open Charge Map, which
+# anyone may edit anonymously, and they end up in the model's context as tool
+# results. Length-capping and stripping control characters keeps a crafted
+# "name" from carrying a wall of injected instructions; the confirmation gate
+# in app.actions is what stops such text having any authority in the first
+# place. Two layers, because neither alone is convincing.
+MAX_FIELD_LEN = 120
+
+
+def _clean(text: Any) -> str | None:
+    """Untrusted third-party text, made boring."""
+    if text is None:
+        return None
+    flat = " ".join(str(text).split())          # collapse newlines and runs of space
+    flat = "".join(ch for ch in flat if ch.isprintable())
+    return flat[:MAX_FIELD_LEN] or None
+
+
 class ChargerSourceUnavailable(RuntimeError):
     """Raised only when every non-Tesla source failed."""
 
@@ -99,8 +117,8 @@ def _normalize_ocm(poi: dict[str, Any], origin: tuple[float, float]) -> dict[str
     max_power = max(powers) if powers else None
     distance = address.get("Distance")
     return {
-        "name": address.get("Title") or operator or "Charging point",
-        "operator": operator,
+        "name": _clean(address.get("Title")) or _clean(operator) or "Charging point",
+        "operator": _clean(operator),
         "address": ", ".join(
             p for p in (address.get("AddressLine1"), address.get("Town")) if p
         )
@@ -141,7 +159,14 @@ async def _ocm_search(
             },
             headers={"User-Agent": USER_AGENT},
         )
-        r.raise_for_status()
+        if r.status_code >= 400:
+            # Never r.raise_for_status() here: httpx puts the full request URL
+            # in the message, and this one carries `key=<the OCM API key>` in
+            # its query string. That string used to travel into the model's
+            # context and into tool_trace on the wire to the client.
+            raise ChargerSourceUnavailable(
+                f"Open Charge Map returned HTTP {r.status_code}"
+            )
         pois = r.json()
     if not isinstance(pois, list):
         raise ChargerSourceUnavailable("unexpected Open Charge Map response")
@@ -157,6 +182,15 @@ async def _ocm_search(
 
 
 # --- OpenStreetMap / Overpass (fallback) -----------------------------------
+
+def _safe_int(value: Any) -> int | None:
+    """`"²".isdigit()` is True but `int("²")` raises, so one crafted OSM
+    capacity tag used to abort the whole area lookup."""
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
 
 def _max_power_kw(tags: dict[str, str]) -> float | None:
     """Power hides under several socket-specific keys (socket:type2:output,
@@ -186,14 +220,14 @@ def _normalize_osm(element: dict[str, Any], origin: tuple[float, float]) -> dict
     operator = tags.get("operator") or tags.get("brand")
     power = _max_power_kw(tags)
     return {
-        "name": tags.get("name") or operator or "Charging point",
-        "operator": operator,
+        "name": _clean(tags.get("name")) or _clean(operator) or "Charging point",
+        "operator": _clean(operator),
         "address": None,
         "type": _classify_site(
             power, operator, tags.get("brand"), tags.get("network"), tags.get("name")
         ),
         "distance_km": round(_haversine_km(*origin, lat, lon), 1),
-        "total_stalls": int(capacity) if capacity and capacity.isdigit() else None,
+        "total_stalls": _safe_int(capacity),
         "available_stalls": None,
         "max_power_kw": power,
         "navigate_to": f"{lat},{lon}",

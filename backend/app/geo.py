@@ -14,6 +14,19 @@ from typing import Any
 
 import httpx
 
+# Nominatim serves OpenStreetMap data, which anyone may edit anonymously, and
+# these strings reach the model as tool results. Same treatment as chargers.py.
+MAX_LABEL_LEN = 160
+
+
+def _clean(text: Any) -> str | None:
+    if text is None:
+        return None
+    flat = " ".join(str(text).split())
+    flat = "".join(ch for ch in flat if ch.isprintable())
+    return flat[:MAX_LABEL_LEN] or None
+
+
 NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 USER_AGENT = "Amp-TeslaAssistant/1.0 (personal use)"
@@ -41,7 +54,7 @@ async def geocode(place: str, language: str = "en") -> dict[str, Any] | None:
     return {
         "latitude": float(top["lat"]),
         "longitude": float(top["lon"]),
-        "name": top.get("display_name", place),
+        "name": _clean(top.get("display_name")) or _clean(place) or place,
     }
 
 
@@ -58,6 +71,6 @@ async def reverse_geocode(lat: float, lon: float, language: str = "en") -> str |
             )
             if r.status_code != 200:
                 return None
-            return r.json().get("display_name")
+            return _clean(r.json().get("display_name"))
     except Exception:
         return None

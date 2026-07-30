@@ -12,7 +12,7 @@ from google import genai
 from google.genai import types
 
 from app.config import get_settings
-from app.llm.prompt import build_system_prompt
+from app.llm.prompt import build_system_prompt, confirmation_payload, sanitize_history
 from app.tesla.adapter import TeslaAdapter
 from app.tools import TOOLS, dispatch
 
@@ -72,7 +72,7 @@ class GeminiOrchestrator:
         history: list[dict[str, Any]] | None = None,
         language: str | None = None,
     ) -> dict[str, Any]:
-        contents: list[dict[str, Any]] = list(history or [])
+        contents: list[dict[str, Any]] = sanitize_history(history)
         contents.append({"role": "user", "parts": [{"text": user_text}]})
         tool_trace: list[dict[str, Any]] = []
         config = self._config(language)
@@ -100,7 +100,14 @@ class GeminiOrchestrator:
                     parts.append(
                         {"function_response": {"name": fc.name, "response": {"result": result}}}
                     )
-                    tool_trace.append({"tool": fc.name, "input": args, "ok": True})
+                    tool_trace.append(
+                        {
+                            "tool": fc.name,
+                            "input": args,
+                            "ok": True,
+                            "result": confirmation_payload(result),
+                        }
+                    )
                 except Exception as e:  # surface failure so the model can recover
                     parts.append(
                         {"function_response": {"name": fc.name, "response": {"error": str(e)}}}

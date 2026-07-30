@@ -9,7 +9,7 @@ from typing import Any
 from anthropic import AsyncAnthropic
 
 from app.config import get_settings
-from app.llm.prompt import build_system_prompt
+from app.llm.prompt import build_system_prompt, confirmation_payload, sanitize_history
 from app.tesla.adapter import TeslaAdapter
 from app.tools import TOOLS, dispatch
 
@@ -28,7 +28,7 @@ class AnthropicOrchestrator:
         history: list[Message] | None = None,
         language: str | None = None,
     ) -> dict[str, Any]:
-        messages: list[Message] = list(history or [])
+        messages: list[Message] = sanitize_history(history)
         messages.append({"role": "user", "content": user_text})
         tool_trace: list[dict[str, Any]] = []
 
@@ -65,7 +65,14 @@ class AnthropicOrchestrator:
                             "content": json.dumps(result),
                         }
                     )
-                    tool_trace.append({"tool": block.name, "input": block.input, "ok": True})
+                    tool_trace.append(
+                        {
+                            "tool": block.name,
+                            "input": block.input,
+                            "ok": True,
+                            "result": confirmation_payload(result),
+                        }
+                    )
                 except Exception as e:
                     tool_results.append(
                         {
