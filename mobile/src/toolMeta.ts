@@ -122,6 +122,26 @@ const META: Record<string, ToolMeta> = {
         ? `install in ${i.delay_minutes} min`
         : "install now",
   },
+  find_places: {
+    system: "PLACES",
+    dot: color.brand,
+    describe: (i) => `${i.query}${i.place ? ` — ${i.place}` : ""}`,
+  },
+  find_chargers: {
+    system: "CHARGE",
+    dot: color.charge,
+    describe: (i) => (i.place ? `near ${i.place}` : "nearby"),
+  },
+  set_navigation_destination: {
+    system: "NAV",
+    dot: color.brand,
+    describe: (i) => String(i.address ?? ""),
+  },
+  where_is_car: {
+    system: "NAV",
+    dot: color.brand,
+    describe: () => "located",
+  },
   get_vehicle_state: {
     system: "STATE",
     dot: color.textTertiary,

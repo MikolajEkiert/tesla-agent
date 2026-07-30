@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app import actions, chargers
+from app import actions, chargers, places
 from app.tesla.adapter import TeslaAdapter
 
 TOOLS: list[dict[str, Any]] = [
@@ -366,6 +366,32 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "find_places",
+        "description": (
+            "Find real places: restaurants, cafés, shops, hotels, parking, "
+            "petrol, pharmacies. Searches around the car unless `place` names "
+            "somewhere else ('in Kraków', 'near the airport'). "
+            "Results carry only what the source returned — if a rating, "
+            "address or opening state is missing from a result, say you don't "
+            "have it rather than filling it in, and never describe a place "
+            "beyond its fields. "
+            "Do not use this for chargers: find_chargers is better and is the "
+            "only source with live stall counts. "
+            "To route somewhere, pass its `navigate_to` value verbatim to "
+            "set_navigation_destination or set_route — never the name."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to look for."},
+                "place": {"type": "string", "description": "Search near here instead."},
+                "open_now": {"type": "boolean"},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "set_charging_amps",
         "description": (
             "Set how many amps the car draws while charging. Lower it when a "
@@ -521,6 +547,16 @@ async def dispatch_unguarded(
             include_other_networks=args.get("include_other_networks", False),
         ),
         "where_is_car": lambda: adapter.get_location(),
+        # Language is left at the provider default rather than threaded through
+        # dispatch: place names come back in their own language either way, and
+        # the setting only shades generic labels. Plumbing the app's language
+        # this far down would touch every tool's signature for that.
+        "find_places": lambda: places.find_places(
+            adapter,
+            query=args["query"],
+            place=args.get("place"),
+            open_now=bool(args.get("open_now", False)),
+        ),
         "set_sentry_mode": lambda: adapter.set_sentry_mode(args["on"]),
         "control_windows": lambda: adapter.control_windows(args["command"]),
         "actuate_trunk": lambda: adapter.actuate_trunk(args["which"]),
