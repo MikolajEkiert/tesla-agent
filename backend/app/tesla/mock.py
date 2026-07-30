@@ -93,6 +93,21 @@ class MockImpl:
         self._state["navigating_to"] = address
         return {"ok": True, "destination": address}
 
+    async def set_route(self, stops: list[dict[str, Any]]) -> dict[str, Any]:
+        self._state["route"] = stops
+        return {
+            "ok": True,
+            "stops_sent": len(stops),
+            "stops": [
+                {"order": i, "label": s.get("label"), "accepted": True}
+                for i, s in enumerate(stops, start=1)
+            ],
+            # The mock cannot answer the question the real car answers, and
+            # saying otherwise here would make the probe agree with an
+            # assumption instead of testing it.
+            "verified_multi_stop": False,
+        }
+
     async def nearby_chargers(self) -> dict[str, Any]:
         return {
             "sites": [

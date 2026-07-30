@@ -776,6 +776,38 @@ class FleetImpl:
             "media_next_fav" if direction == "next" else "media_prev_fav"
         )
 
+    async def set_route(self, stops: list[dict[str, Any]]) -> dict[str, Any]:
+        """Send the stops in order, one command each.
+
+        `order` is documented — "Order can be used to specify order of multiple
+        stops" — but what is *not* documented is whether separate calls
+        accumulate into one route or each replaces the destination. That is the
+        difference between this working and only the last stop arriving, and it
+        cannot be settled from the outside.
+
+        So the result says what actually happened and no more:
+        `verified_multi_stop` stays false until the car is observed building a
+        route from these, and the tool description tells the model not to
+        promise the driver a multi-stop route on the strength of it. An
+        optimistic claim here becomes a confident wrong sentence in the cabin.
+        """
+        sent: list[dict[str, Any]] = []
+        for order, stop in enumerate(stops, start=1):
+            # Unsigned, like every navigation command: the signing proxy
+            # handles none of them (verified against its own command table).
+            result = await self._command(
+                "navigation_gps_request",
+                {"lat": stop["latitude"], "lon": stop["longitude"], "order": order},
+                signed=False,
+            )
+            sent.append({"order": order, "label": stop.get("label"), "accepted": bool(result)})
+        return {
+            "ok": True,
+            "stops_sent": len(sent),
+            "stops": sent,
+            "verified_multi_stop": False,
+        }
+
     # --- navigation (unsigned — the proxy itself refuses this command) ---
     async def set_navigation_destination(self, address: str) -> dict[str, Any]:
         """Free-text address/place; Tesla geocodes it server-side. This is

@@ -66,6 +66,14 @@ class TeslaAdapter(ABC):
 
     # --- navigation ---
     @abstractmethod
+    async def set_route(self, stops: list[dict[str, Any]]) -> dict[str, Any]:
+        """Ordered waypoints: [{'latitude', 'longitude', 'label'?}, ...].
+
+        Separate from set_navigation_destination because the car takes them by
+        different commands — coordinates with an order, versus a shared string
+        Tesla geocodes itself."""
+
+    @abstractmethod
     async def set_navigation_destination(self, address: str) -> dict[str, Any]:
         """Free-text address/place name; Tesla geocodes it server-side."""
 

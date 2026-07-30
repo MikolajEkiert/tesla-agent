@@ -137,6 +137,18 @@ const META: Record<string, ToolMeta> = {
     dot: color.brand,
     describe: (i) => String(i.address ?? ""),
   },
+  set_route: {
+    system: "NAV",
+    dot: color.brand,
+    describe: (i) => {
+      const stops = Array.isArray(i.stops) ? i.stops : [];
+      const labels = stops
+        .map((s) => (s as { label?: string })?.label)
+        .filter(Boolean)
+        .join(" → ");
+      return labels || `${stops.length} stops`;
+    },
+  },
   where_is_car: {
     system: "NAV",
     dot: color.brand,

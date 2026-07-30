@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app import actions, chargers, places
+from app import actions, chargers, navigation, places
 from app.tesla.adapter import TeslaAdapter
 
 TOOLS: list[dict[str, Any]] = [
@@ -366,6 +366,42 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "set_route",
+        "description": (
+            "Send a route with stops to the car's navigation; it visits them "
+            "in the order given. Use this when the user wants to stop "
+            "somewhere on the way ('charge in Kielce, then Warsaw'). For a "
+            "single plain destination use set_navigation_destination instead. "
+            "Each stop needs either `coordinates` copied verbatim from a "
+            "find_chargers or find_places `navigate_to` value, or a specific "
+            "geocodable `address` — never coordinates you worked out yourself. "
+            "Report only what the result says: if `verified_multi_stop` is "
+            "false, the stops were sent but the car has not been confirmed to "
+            "build them into one route, so do not promise the driver a "
+            "multi-stop route — say the stops were sent and to check the "
+            "screen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "stops": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string"},
+                            "coordinates": {"type": "string"},
+                            "address": {"type": "string"},
+                        },
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["stops"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "find_places",
         "description": (
             "Find real places: restaurants, cafés, shops, hotels, parking, "
@@ -519,6 +555,22 @@ async def dispatch(adapter: TeslaAdapter, name: str, args: dict[str, Any]) -> di
     return await dispatch_unguarded(adapter, name, args)
 
 
+async def _send_route(adapter: TeslaAdapter, stops: list[dict[str, Any]]) -> dict[str, Any]:
+    """Resolve every stop to coordinates, then hand the lot to the car.
+
+    A single stop given only as free text goes the old way instead: Tesla
+    geocodes a shared string server-side and is better at it than a Nominatim
+    lookup here, so there is no reason to resolve what we can simply forward.
+    """
+    if (
+        len(stops) == 1
+        and not navigation.parse_coordinates(stops[0].get("coordinates"))
+        and stops[0].get("address")
+    ):
+        return await adapter.set_navigation_destination(stops[0]["address"])
+    return await adapter.set_route(await navigation.resolve_stops(stops))
+
+
 async def dispatch_unguarded(
     adapter: TeslaAdapter, name: str, args: dict[str, Any]
 ) -> dict[str, Any]:
@@ -581,6 +633,7 @@ async def dispatch_unguarded(
         ),
         "set_climate_keeper_mode": lambda: adapter.set_climate_keeper_mode(args["mode"]),
         "set_navigation_destination": lambda: adapter.set_navigation_destination(args["address"]),
+        "set_route": lambda: _send_route(adapter, args.get("stops") or []),
         "set_charging_amps": lambda: adapter.set_charging_amps(int(args["amps"])),
         "set_steering_wheel_heater": lambda: adapter.set_steering_wheel_heater(args["on"]),
         "set_volume": lambda: adapter.set_volume(float(args["level"])),
