@@ -21,6 +21,7 @@ import io
 import os
 import re
 import wave
+from typing import Any
 
 from google import genai
 from google.genai import errors as genai_errors
@@ -239,6 +240,34 @@ def _model() -> str:
     return os.getenv("GEMINI_TRANSCRIBE_MODEL") or get_settings().gemini_model
 
 
+async def _generate_with_fallback(client: Any, contents: list[Any], config: Any) -> Any:
+    """Ask the configured model, and drop to the chat model when its day is
+    spent.
+
+    Shared by both transcription paths. The confirmation path needs it just as
+    much as the chat one — arguably more: a spent quota there would mean the
+    spoken confirmation silently stops working mid-drive, which reads as the
+    feature being broken rather than rationed.
+    """
+    primary = _model()
+    fallback = get_settings().gemini_model
+    try:
+        return await client.aio.models.generate_content(
+            model=primary, contents=contents, config=config
+        )
+    except genai_errors.ClientError as e:
+        # Only a spent quota is worth retrying on a different model — a bad
+        # request or a content-safety block would fail the same way twice. And
+        # there is nothing to retry with when GEMINI_TRANSCRIBE_MODEL was never
+        # set and primary already *is* the chat model.
+        if e.code != 429 or primary == fallback:
+            raise
+        print(f"voice: {primary} exhausted, retrying on {fallback}")
+        return await client.aio.models.generate_content(
+            model=fallback, contents=contents, config=config
+        )
+
+
 async def transcribe(audio: bytes, mime_type: str, language: str | None = None) -> str:
     settings = get_settings()
     if not settings.gemini_api_key:
@@ -277,23 +306,7 @@ async def transcribe(audio: bytes, mime_type: str, language: str | None = None) 
         response_modalities=["TEXT"],
     )
 
-    primary = _model()
-    fallback = settings.gemini_model
-    try:
-        resp = await client.aio.models.generate_content(
-            model=primary, contents=contents, config=config
-        )
-    except genai_errors.ClientError as e:
-        # Only a spent daily quota is worth retrying on a different model — a
-        # bad request or a content-safety block would fail the same way twice.
-        # Nothing to retry with either, when GEMINI_TRANSCRIBE_MODEL was never
-        # set and primary already *is* the chat model.
-        if e.code != 429 or primary == fallback:
-            raise
-        print(f"voice.transcribe: {primary} exhausted, retrying on {fallback}")
-        resp = await client.aio.models.generate_content(
-            model=fallback, contents=contents, config=config
-        )
+    resp = await _generate_with_fallback(client, contents, config)
     text = (resp.text or "").strip()[:MAX_TRANSCRIPT_CHARS]
     # The sentinel means "I heard nothing", which is the same answer to the
     # caller as an empty transcript. Matched loosely: models like to add a
@@ -301,3 +314,68 @@ async def transcribe(audio: bytes, mime_type: str, language: str | None = None) 
     if NO_SPEECH.strip("[]").lower() in text.lower():
         return ""
     return text if _looks_like_speech(text) else ""
+
+
+# A second, deliberately ignorant transcription path, used only for the one
+# word that settles a confirmation.
+#
+# It shares the audio gate above and nothing else. In particular it must never
+# see _DOMAIN_HINT: that list of car vocabulary is what measurably drove the
+# invention — handed noise and a domain, the model produced "Włącz podgrzewanie
+# prawego fotela" rather than admitting it heard nothing. Here there is no
+# domain to fill in with. It is told to expect one short word, and a model
+# hearing nothing has nothing plausible to reach for.
+_CONFIRM_PROMPT = (
+    "Transcribe this audio. Expect a single short word, spoken by one person. "
+    f"If there is no clear, confident speech, reply with exactly {NO_SPEECH} "
+    "and nothing else. Do not guess, do not complete a phrase, do not invent a "
+    "sentence. Output only the word you actually heard, with no commentary, no "
+    "quotation marks and no punctuation."
+)
+
+# One word plus slop. Anything longer is not the answer to a yes/no card, and
+# capping here means a long fabrication cannot even reach the matcher.
+MAX_CONFIRM_CHARS = 48
+
+
+async def transcribe_confirmation(audio: bytes, mime_type: str) -> str:
+    """Audio in, at most a word out. Empty when nothing was clearly said.
+
+    No language argument on purpose: the matcher accepts both languages
+    regardless of the app's setting, so telling the model which one to expect
+    would only bias it towards hearing that language in noise.
+    """
+    settings = get_settings()
+    if not settings.gemini_api_key:
+        raise TranscriptionError("GEMINI_API_KEY is not set.")
+    if not audio:
+        raise TranscriptionError("Empty recording")
+    if len(audio) > MAX_AUDIO_BYTES:
+        raise TranscriptionError("Recording too long")
+
+    mime_type = (mime_type or "").split(";")[0].strip().lower()
+    if mime_type not in ALLOWED_MIME_TYPES:
+        raise TranscriptionError(f"Unsupported audio format: {mime_type or 'unknown'}")
+
+    # The same deterministic gate the chat path uses, applied server-side
+    # rather than trusted from the client — road noise must not get as far as
+    # a model that might hear a word in it.
+    evidence = _wav_speech_evidence(audio)
+    if evidence is not None:
+        in_band_ms, consonant_ms = evidence
+        if in_band_ms < _MIN_IN_BAND_MS or consonant_ms < _MIN_CONSONANT_MS:
+            return ""
+
+    client = genai.Client(api_key=settings.gemini_api_key)
+    resp = await _generate_with_fallback(
+        client,
+        [
+            types.Part.from_bytes(data=audio, mime_type=mime_type),
+            types.Part.from_text(text=_CONFIRM_PROMPT),
+        ],
+        types.GenerateContentConfig(temperature=0, response_modalities=["TEXT"]),
+    )
+    text = (resp.text or "").strip()[:MAX_CONFIRM_CHARS]
+    if NO_SPEECH.strip("[]").lower() in text.lower():
+        return ""
+    return text

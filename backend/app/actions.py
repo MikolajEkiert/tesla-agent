@@ -44,14 +44,92 @@ CONFIRM_REQUIRED = {
     "software_update",
 }
 
+# Everything gated except opening the car.
+#
+# The owner asked to be able to confirm by voice, which changes the sentence
+# this module opens with: it is no longer "an injected instruction cannot tap
+# the card", but "…cannot tap it, and cannot speak either". That is a real
+# weakening and worth stating plainly rather than burying.
+#
+# What it is not is a new authority. The spoken path is strictly *weaker* than
+# the tap: same session cookie, a quarter of the window, one attempt, and a
+# smaller set of reachable commands. Anyone who could speak a confirmation
+# could already have tapped one.
+#
+# `unlock` stays out because voice carries further than a finger. A passenger,
+# or somebody beside the car, is inside the trust boundary for the trunk in a
+# way they are not for the doors. Enforced here rather than in the client, so
+# a bug in our own front end cannot widen it.
+VOICE_CONFIRMABLE = CONFIRM_REQUIRED - {"unlock"}
+
 # A proposal is worthless to an attacker after a moment, and expiring them
 # keeps a stale card from being tapped much later out of context.
 PENDING_TTL_S = 120
+
+# Much shorter for the spoken path. A tap can wait two minutes because it takes
+# a deliberate finger; a word only makes sense while the driver is still in the
+# exchange that produced the card. Anything later is someone talking about
+# something else.
+VOICE_WINDOW_S = 25
+
 _pending: dict[str, dict[str, Any]] = {}
+
+
+class VoiceConfirmRefused(RuntimeError):
+    """Voice may not settle this one — the caller should say so and let the
+    owner tap instead."""
 
 
 def needs_confirmation(tool: str) -> bool:
     return tool in CONFIRM_REQUIRED
+
+
+def voice_eligible(token: str) -> dict[str, Any]:
+    """The parked command a spoken word is allowed to settle, or a refusal.
+
+    Refuses when the token is unknown or expired, when the command is one voice
+    may not reach, when the card is older than the spoken window, when the one
+    spoken attempt has already been used — and when more than one proposal is
+    currently eligible, because then there is no way to know which one the word
+    meant. Ambiguity resolves to the tap, never to a guess.
+    """
+    now = time.time()
+    _prune_pending(now)
+
+    entry = _pending.get(token)
+    if entry is None:
+        raise VoiceConfirmRefused("This confirmation has expired or was already used.")
+    if entry["tool"] not in VOICE_CONFIRMABLE:
+        raise VoiceConfirmRefused(f"{entry['tool']} has to be confirmed with a tap.")
+    if now - entry["created_at"] > VOICE_WINDOW_S:
+        raise VoiceConfirmRefused("Too long since that was proposed — tap to confirm.")
+    if entry.get("voice_tried"):
+        raise VoiceConfirmRefused("Already tried once by voice — tap to confirm.")
+
+    eligible = [
+        other
+        for other in _pending.values()
+        if other["tool"] in VOICE_CONFIRMABLE
+        and now - other["created_at"] <= VOICE_WINDOW_S
+        and not other.get("voice_tried")
+    ]
+    if len(eligible) > 1:
+        raise VoiceConfirmRefused("More than one thing is waiting — tap the one you mean.")
+
+    return entry
+
+
+def burn_voice_attempt(token: str) -> None:
+    """One spoken try per proposal.
+
+    Only spent on an utterance that was actually heard and understood as
+    something else. Noise and silence do not count: a cabin loud enough to
+    garble one attempt would otherwise lock the owner out of his own card,
+    which turns a safeguard into a denial of service.
+    """
+    entry = _pending.get(token)
+    if entry is not None:
+        entry["voice_tried"] = True
 
 
 def _prune_pending(now: float) -> None:
@@ -82,6 +160,14 @@ def propose(tool: str, args: dict[str, Any]) -> dict[str, Any]:
             "to achieve the same effect."
         ),
     }
+
+
+def peek_exists(token: str) -> bool:
+    """Whether a proposal is still parked and tappable. Used by the probes to
+    tell "voice refused it" apart from "it is gone entirely" — those are very
+    different outcomes for the owner holding the phone."""
+    _prune_pending(time.time())
+    return token in _pending
 
 
 def discard(token: str) -> bool:
