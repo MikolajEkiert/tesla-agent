@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
-import { BackendError, confirmAction } from "../api";
+import { BackendError, confirmAction, discardAction } from "../api";
 import { useLanguage } from "../LanguageContext";
 import type { TranslationKey } from "../i18n";
 import { color, font, radius, space } from "../theme";
@@ -22,16 +22,45 @@ const LABEL_FOR_TOOL: Record<string, TranslationKey> = {
   trigger_homelink: "confirmHomelink",
   control_windows: "confirmWindows",
   set_sentry_mode: "confirmSentry",
+  // Was missing, so the card for a software update showed the raw tool name.
+  software_update: "confirmUpdate",
 };
+
+/**
+ * Which argument decides what actually happens, per tool.
+ *
+ * "Open the trunk" is two different commands depending on one word, and the
+ * card used to show neither — you were asked to approve "open the trunk" with
+ * no way to tell front from rear. Naming the detail is the difference between
+ * confirming and guessing.
+ */
+const DETAIL_ARG: Record<string, string> = {
+  actuate_trunk: "which",
+  control_windows: "command",
+  set_sentry_mode: "on",
+  software_update: "action",
+};
+
+function detailOf(tool: string, args: Record<string, unknown> | undefined): string | null {
+  const key = DETAIL_ARG[tool];
+  if (!key || !args || !(key in args)) return null;
+  const value = args[key];
+  if (typeof value === "boolean") return value ? "on" : "off";
+  return String(value);
+}
 
 export function ConfirmCard({
   token,
   tool,
+  args,
   onDone,
   onDismiss,
 }: {
   token: string;
   tool: string;
+  /** Straight from tool_trace — the client already holds it, so the card can
+   *  say what it is about without a second round trip to the server. */
+  args?: Record<string, unknown>;
   onDone: () => void;
   onDismiss: () => void;
 }) {
@@ -41,7 +70,8 @@ export function ConfirmCard({
   const [settled, setSettled] = useState<"done" | "dismissed" | null>(null);
 
   const labelKey = LABEL_FOR_TOOL[tool];
-  const what = labelKey ? t(labelKey) : tool;
+  const detail = detailOf(tool, args);
+  const what = (labelKey ? t(labelKey) : tool) + (detail ? ` (${detail})` : "");
 
   if (settled) {
     return (
@@ -75,6 +105,9 @@ export function ConfirmCard({
         <Pressable
           onPress={() => {
             setSettled("dismissed");
+            // Tell the server too, so declining actually removes the parked
+            // command rather than only hiding the card that offers it.
+            void discardAction(token);
             onDismiss();
           }}
           disabled={busy}

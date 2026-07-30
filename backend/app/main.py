@@ -458,14 +458,21 @@ class ConfirmRequest(BaseModel):
     token: str
 
 
-@app.get("/actions/pending/{token}")
-async def pending_action(token: str) -> dict[str, Any]:
-    """What the confirmation card should say. Behind the session gate, so only
-    the owner can even see that something is waiting."""
-    entry = actions.peek_pending(token)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Nothing pending for that token")
-    return entry
+@app.delete("/actions/pending/{token}")
+async def discard_action(token: str) -> dict[str, bool]:
+    """Throw away a proposal the owner declined.
+
+    Until this existed, "Cancel" on the card was a purely visual act: the card
+    said nothing was sent, which was true, but the proposal stayed parked and
+    tappable for the rest of its two minutes. Declining should mean the thing
+    is gone, not hidden.
+
+    Returns ok either way — a token already expired or already used is the
+    outcome the caller wanted anyway, and reporting the difference would only
+    tell an attacker which tokens exist.
+    """
+    actions.discard(token)
+    return {"ok": True}
 
 
 @app.post("/actions/confirm")

@@ -314,6 +314,7 @@ export function ChatScreen({
                   id: id(),
                   token: pending.confirm_token,
                   tool: call.tool,
+                  args: call.input,
                 },
               ];
             }
@@ -578,6 +579,7 @@ export function ChatScreen({
               <ConfirmCard
                 token={item.token}
                 tool={item.tool}
+                args={item.args}
                 onDone={() => {
                   refreshVehicle();
                   refreshScheduled();

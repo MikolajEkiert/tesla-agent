@@ -84,10 +84,10 @@ def propose(tool: str, args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def peek_pending(token: str) -> dict[str, Any] | None:
+def discard(token: str) -> bool:
+    """Forget a proposal the owner declined. True if there was one to forget."""
     _prune_pending(time.time())
-    entry = _pending.get(token)
-    return None if entry is None else {"tool": entry["tool"], "args": entry["args"]}
+    return _pending.pop(token, None) is not None
 
 
 async def confirm(adapter: TeslaAdapter, token: str) -> dict[str, Any]:

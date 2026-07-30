@@ -82,19 +82,24 @@ export async function lock(): Promise<void> {
   if (!res.ok) throw new BackendError(await errorDetail(res));
 }
 
-/** A sensitive command the assistant proposed; only a tap executes it. */
-export interface PendingAction {
-  tool: string;
-  args: Record<string, unknown>;
-}
-
-export async function fetchPendingAction(token: string): Promise<PendingAction> {
-  const res = await fetch(
-    `${DEFAULT_BASE_URL}/actions/pending/${encodeURIComponent(token)}`,
-    CREDENTIALS
-  );
-  await guard(res);
-  return res.json();
+/**
+ * Throw the proposal away when the owner declines it.
+ *
+ * "Cancel" used to be purely cosmetic — the card hid itself and the command
+ * stayed parked and tappable until it expired. Best-effort on purpose: the
+ * card has already settled by the time this runs, and a failed discard leaves
+ * a proposal that expires by itself in under two minutes, which is not worth
+ * an error message over a decision the owner has already made.
+ */
+export async function discardAction(token: string): Promise<void> {
+  try {
+    await fetch(`${DEFAULT_BASE_URL}/actions/pending/${encodeURIComponent(token)}`, {
+      ...CREDENTIALS,
+      method: "DELETE",
+    });
+  } catch {
+    // offline, or the session lapsed — the TTL is the backstop
+  }
 }
 
 export async function confirmAction(token: string): Promise<void> {

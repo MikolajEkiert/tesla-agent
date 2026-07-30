@@ -14,7 +14,15 @@ export type ChatItem =
   | { kind: "tool"; id: string; call: ToolCall }
   // A physically consequential command the assistant proposed; only a tap on
   // this row executes it (see components/ConfirmCard.tsx).
-  | { kind: "confirm"; id: string; token: string; tool: string };
+  | {
+      kind: "confirm";
+      id: string;
+      token: string;
+      tool: string;
+      /** The call's own arguments, carried across so the card can say which
+       *  trunk or which window it is about to move. */
+      args?: Record<string, unknown>;
+    };
 
 export interface VehicleState {
   awake?: boolean;
