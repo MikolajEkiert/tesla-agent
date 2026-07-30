@@ -1,149 +1,137 @@
 """Text to speech.
 
 The mirror image of voice.py, and just as deliberately narrow: text in, audio
-out, no tools, no system prompt, no reach into the car. The reply this speaks
-has already been through /chat and the confirmation gate; by the time it gets
-here it is a finished string, and this module's only job is to make it audible.
+out, no tools, no system prompt, nothing that can reach the car. The reply this
+speaks has already been through /chat and the confirmation gate; by the time it
+arrives here it is a finished string.
 
-Why this exists at all: the phone's built-in Polish voice is the only one iOS
-offers, and it is a concatenative synthesiser that sounds a decade old. The
-speech models return something a person would mistake for a person, and — the
-part that makes them usable rather than merely nicer — the delivery is steered
-in words, so the assistant can sound calm and unhurried in a car instead of
-like a station announcement.
+Why a cloud voice at all: the phone offers exactly one Polish voice and it is a
+concatenative synthesiser that sounds a decade old. No amount of work in the
+app raises that ceiling, because the ceiling is the voice.
 
-The catch, measured rather than assumed: the free tier limits requests per
-minute. Ask several questions in quick succession and one of them comes back
-429. That is why every failure here is reported as a 503 and the app quietly
-falls back to the built-in voice. A slightly worse voice is a small loss; an
-assistant that goes silent mid-drive is not.
+Why Chirp 3: HD on Cloud Text-to-Speech rather than the same voices through the
+AI Studio API, which is what this module used first: the free tier there is
+**ten requests per day**, measured the hard way — the quota message named it
+only after a client threw the server's reason away and the assistant appeared
+to be stuck on the phone's voice. Ten a day is a demo, not an assistant. Cloud
+bills the same voices per character against a monthly free allowance that a
+personal assistant does not come close to spending.
+
+What that trade costs: Chirp 3 does not take a natural-language style note, so
+delivery can no longer be directed in words — only pace, pauses and SSML. The
+assistant's *manner* is unaffected, because that was never here: it lives in
+llm/prompt.py, which chooses the words. This module only reads them.
 """
 from __future__ import annotations
 
-import os
-import struct
+import base64
 
-from google import genai
-from google.genai import types
+import httpx
 
 from app.config import get_settings
 
 # The reply is a sentence or two by design (see llm/prompt.py). This cap is a
-# backstop against synthesising — and paying for — something pathological.
+# backstop against synthesising — and paying for — something pathological. Well
+# under the API's own 4000-byte limit on the input field.
 MAX_SPEAK_CHARS = 1200
 
-# The model returns headerless PCM at this rate; the WAV header below has to
-# agree with it, so the two constants live together.
-SAMPLE_RATE = 24000
+ENDPOINT = "https://texttospeech.googleapis.com/v1/text:synthesize"
 
-# Prebuilt voices, allow-listed rather than passed through. The name reaches a
-# paid API from a request body, so it is validated here and an unknown value
-# falls back to the default instead of travelling onward.
+# MP3 rather than the default LINEAR16: a ten-second reply is about 40 KB
+# instead of half a megabyte, and this is fetched over mobile data in a moving
+# car, where the difference is the wait before the answer starts.
+AUDIO_ENCODING = "MP3"
+MEDIA_TYPE = "audio/mpeg"
+
+# Chosen by ear by the owner — three male, three female. Which one speaks costs
+# the same: the meter runs on characters, not on the voice.
 #
-# The set is deliberately small. The full catalogue has thirty, and a list that
-# long is a chore to audition when the difference between neighbours is slight
-# and only audible on a real sentence.
+# Allow-listed rather than passed through, because the name arrives in a
+# request body and ends up in a URL to a paid API. An unknown value falls back
+# to the default instead of travelling onward.
 VOICES = {
-    # Chosen by ear by the owner.
-    "Puck",            # upbeat
-    "Rasalgethi",      # informative
-    "Zubenelgenubi",   # casual
-    # Female counterparts, so the choice is not one-sided. They cost exactly
-    # the same: price here follows seconds of audio, not which voice said it.
-    "Leda",            # youthful, light
-    "Sulafat",         # warm
-    "Vindemiatrix",    # gentle
+    "Puck",
+    "Rasalgethi",
+    "Zubenelgenubi",
+    "Leda",
+    "Sulafat",
+    "Vindemiatrix",
 }
 
 DEFAULT_VOICE = "Puck"
 
-# The delivery note. This is the whole reason a cloud voice is worth the
-# round trip: without it the model reads a list of numbers like a newsreader,
-# which is exactly the register that grates when it is the fifth time today.
-_STYLE = (
-    "Mów jak spokojny, opanowany asystent w samochodzie. Ciepły ton, tempo "
-    "swobodnej rozmowy, lekko przygaszona energia — jakbyś siedział obok "
-    "kierowcy i po prostu podawał fakty. Bez entuzjazmu, bez lektorskiego "
-    "zaśpiewu. Liczby czytaj naturalnie, nie wyliczankowo."
-)
+# Chirp 3 voices are named <locale>-Chirp3-HD-<voice>, so the locale is part of
+# the identity: the same voice speaks Polish or English depending on it.
+_LOCALES = {"pl": "pl-PL", "en": "en-US"}
+DEFAULT_LOCALE = "pl-PL"
 
-_STYLE_EN = (
-    "Speak like a calm, composed in-car assistant. Warm tone, conversational "
-    "pace, slightly dialled-down energy — as if sitting beside the driver and "
-    "simply stating facts. No enthusiasm, no announcer sing-song. Read numbers "
-    "naturally, not as a list."
-)
+# Left at natural speed on purpose. The 1.15 the phone's voice needs is a
+# correction for a synthesiser that reads slower than a person; applying it
+# here would rush a voice that already has a human cadence.
+SPEAKING_RATE = 1.0
+
+# Long enough for a slow first response from a cold API, short enough that a
+# stalled request falls back to the phone's voice while the answer is still
+# worth hearing.
+TIMEOUT_SECONDS = 20.0
 
 
 class SpeechError(RuntimeError):
     pass
 
 
-def _model() -> str:
-    """Separate from GEMINI_MODEL: the chat model cannot synthesise speech, so
-    unlike transcription this cannot fall back to it."""
-    return os.getenv("GEMINI_TTS_MODEL") or "gemini-2.5-flash-preview-tts"
-
-
 def resolve_voice(name: str | None) -> str:
     return name if name in VOICES else DEFAULT_VOICE
 
 
-def _wav(pcm: bytes) -> bytes:
-    """Wrap raw PCM in a WAV header.
+def _locale(language: str | None) -> str:
+    return _LOCALES.get((language or "").lower(), DEFAULT_LOCALE)
 
-    The model returns 16-bit mono samples with no container at all, and a
-    browser will not play a bare byte stream. Forty-four bytes of header is
-    cheaper than asking the client to assemble this, and keeps the audio a
-    plain file that any <audio> element accepts.
-    """
-    return (
-        b"RIFF"
-        + struct.pack("<I", 36 + len(pcm))
-        + b"WAVEfmt "
-        + struct.pack("<IHHIIHH", 16, 1, 1, SAMPLE_RATE, SAMPLE_RATE * 2, 2, 16)
-        + b"data"
-        + struct.pack("<I", len(pcm))
-        + pcm
-    )
+
+def _api_key() -> str:
+    """Separate from GEMINI_API_KEY: a different Google product, a different
+    project, and one that stops working the moment they are confused."""
+    return get_settings().google_tts_api_key
 
 
 async def synthesize(text: str, language: str | None = None, voice: str | None = None) -> bytes:
-    settings = get_settings()
-    if not settings.gemini_api_key:
-        raise SpeechError("GEMINI_API_KEY is not set — spoken replies need it.")
+    if not _api_key():
+        raise SpeechError("GOOGLE_TTS_API_KEY is not set — spoken replies need it.")
 
     spoken = (text or "").strip()[:MAX_SPEAK_CHARS]
     if not spoken:
         raise SpeechError("Nothing to speak")
 
-    style = _STYLE_EN if (language or "").lower() == "en" else _STYLE
+    locale = _locale(language)
+    body = {
+        # Plain text, never SSML: a reply is model output, and handing model
+        # output to a markup parser lets a stray "<" decide how the rest is
+        # read — or fail the request outright.
+        "input": {"text": spoken},
+        "voice": {"languageCode": locale, "name": f"{locale}-Chirp3-HD-{resolve_voice(voice)}"},
+        "audioConfig": {"audioEncoding": AUDIO_ENCODING, "speakingRate": SPEAKING_RATE},
+    }
 
-    client = genai.Client(api_key=settings.gemini_api_key)
-    resp = await client.aio.models.generate_content(
-        model=_model(),
-        # The style note and the line are one prompt: the model treats the
-        # leading instruction as direction and the rest as the words to say.
-        contents=f"{style}\n\n{spoken}",
-        config=types.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=resolve_voice(voice)
-                    )
-                )
-            ),
-        ),
-    )
+    async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+        try:
+            resp = await client.post(
+                ENDPOINT,
+                json=body,
+                # In the header, not the query string: a key in a URL ends up
+                # in logs and proxies.
+                headers={"x-goog-api-key": _api_key()},
+            )
+        except httpx.HTTPError as e:
+            raise SpeechError(f"Speech service unreachable: {e}")
 
-    try:
-        pcm = resp.candidates[0].content.parts[0].inline_data.data
-    except (AttributeError, IndexError, TypeError):
-        # A refusal or a safety block arrives as a well-formed response with no
-        # audio in it, which would otherwise surface as an AttributeError deep
-        # in the route and read as a server bug.
-        raise SpeechError("Model returned no audio")
-    if not pcm:
-        raise SpeechError("Model returned empty audio")
-    return _wav(pcm)
+    if resp.status_code != 200:
+        # The body carries the real explanation — a disabled API, a quota, a
+        # key restricted to the wrong referrer. Passed through, because the
+        # settings screen shows it and that is how a silent fallback stops
+        # being a mystery. Truncated: some of these run to pages.
+        raise SpeechError(f"Speech service said {resp.status_code}: {resp.text[:300]}")
+
+    audio = base64.b64decode(resp.json().get("audioContent", "") or "")
+    if not audio:
+        raise SpeechError("Speech service returned no audio")
+    return audio

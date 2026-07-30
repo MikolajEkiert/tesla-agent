@@ -408,7 +408,7 @@ async def voice_speak(req: VoiceSpeakRequest) -> Response:
         raise HTTPException(status_code=503, detail=str(e))
     return Response(
         content=audio,
-        media_type="audio/wav",
+        media_type=tts.MEDIA_TYPE,
         # The same reply is often spoken twice (asked again, or replayed), and
         # a reply is derived entirely from its text, so letting the browser
         # keep it briefly saves a quota slot on the free tier.

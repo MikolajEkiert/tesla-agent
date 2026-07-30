@@ -21,6 +21,11 @@ class Settings:
     # limit at https://aistudio.google.com/rate-limit if you ever hit it.
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
+    # Google Cloud Text-to-Speech — spoken replies. A different product from
+    # the Gemini key above and a different project, so a separate variable:
+    # they look interchangeable and are not.
+    google_tts_api_key: str = os.getenv("GOOGLE_TTS_API_KEY", "")
+
     # Anthropic (fallback provider)
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-opus-5")
