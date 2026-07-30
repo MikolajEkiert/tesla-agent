@@ -227,22 +227,55 @@ TOOLS: list[dict[str, Any]] = [
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
-        "name": "set_scheduled_charging",
+        "name": "add_schedule",
         "description": (
-            "Set (or clear) the daily time at which the car starts charging — "
-            "the usual reason is a cheaper night tariff. The time is the car's "
-            "own local time, given as hour and minute. This is stored in the "
-            "car, so it keeps working regardless of this app. Pass enable=false "
-            "to turn the schedule off."
+            "Add or update a schedule stored in the car. kind='charge' sets "
+            "when charging starts (the usual reason is a cheaper night "
+            "tariff); kind='precondition' has the car warm or cool the cabin "
+            "so it is ready to leave at that time. Times are the car's own "
+            "local time. `days` accepts 'All', 'Weekdays', 'Weekends' or a "
+            "comma-separated list like 'Monday,Thursday'. "
+            "A schedule applies at the place the car is standing when it is "
+            "created — normally home — so say so if the user might be "
+            "somewhere else. To change an existing one, pass its id from "
+            "list_schedules; to turn one off, use remove_schedule."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "enable": {"type": "boolean"},
+                "kind": {"type": "string", "enum": ["charge", "precondition"]},
                 "hour": {"type": "integer", "minimum": 0, "maximum": 23},
                 "minute": {"type": "integer", "minimum": 0, "maximum": 59},
+                "days": {"type": "string"},
+                "one_time": {"type": "boolean", "description": "Run once, then forget it."},
+                "id": {"type": "integer", "description": "Update this existing schedule."},
             },
-            "required": ["enable"],
+            "required": ["kind", "hour"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "list_schedules",
+        "description": (
+            "The charge and preconditioning schedules the car is holding, with "
+            "their ids. Read this before changing or removing one — ids are "
+            "the car's, not something to guess."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "remove_schedule",
+        "description": (
+            "Delete one schedule by id. This is how a schedule is turned off; "
+            "there is no enabled flag to flip. Get the id from list_schedules."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["charge", "precondition"]},
+                "id": {"type": "integer"},
+            },
+            "required": ["kind", "id"],
             "additionalProperties": False,
         },
     },
@@ -349,31 +382,6 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "set_scheduled_departure",
-        "description": (
-            "Have the car ready to leave at a given time: it decides when to "
-            "start charging, and optionally warms or cools the cabin to meet "
-            "it. Different from set_scheduled_charging, which sets when "
-            "charging begins rather than when you leave. Use this when the "
-            "user talks about when they are leaving; use the other when they "
-            "talk about when charging should start."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "enable": {"type": "boolean"},
-                "hour": {"type": "integer"},
-                "minute": {"type": "integer"},
-                "precondition": {
-                    "type": "boolean",
-                    "description": "Also bring the cabin to temperature for that time.",
-                },
-            },
-            "required": ["enable"],
-            "additionalProperties": False,
-        },
-    },
-    {
         "name": "set_steering_wheel_heater",
         "description": (
             "Turn the heated steering wheel on or off. Not every car has the "
@@ -445,8 +453,7 @@ NUMERIC_BOUNDS = {
     "set_charge_limit": {"percent": (50, 100)},
     "set_seat_heater": {"level": (0, 3)},
     "schedule_climate": {"celsius": (15, 28), "run_for_minutes": (1, 30)},
-    "set_scheduled_charging": {"hour": (0, 23), "minute": (0, 59)},
-    "set_scheduled_departure": {"hour": (0, 23), "minute": (0, 59)},
+    "add_schedule": {"hour": (0, 23), "minute": (0, 59)},
     # 5 A is the lowest the car accepts; 48 covers every domestic and wall
     # connector this car can be wired to. The car clamps to its own maximum
     # anyway, but sending nonsense wastes a wake-up to be told so.
@@ -519,9 +526,19 @@ async def dispatch_unguarded(
         "actuate_trunk": lambda: adapter.actuate_trunk(args["which"]),
         "charge_port": lambda: adapter.charge_port(args["open"]),
         "trigger_homelink": lambda: adapter.trigger_homelink(),
-        "set_scheduled_charging": lambda: adapter.set_scheduled_charging(
-            args["enable"],
+        "list_schedules": lambda: adapter.list_schedules(),
+        "add_schedule": lambda: (
+            adapter.add_precondition_schedule
+            if args.get("kind") == "precondition"
+            else adapter.add_charge_schedule
+        )(
             int(args.get("hour", 0)) * 60 + int(args.get("minute", 0)),
+            str(args.get("days", "All")),
+            bool(args.get("one_time", False)),
+            int(args["id"]) if args.get("id") is not None else None,
+        ),
+        "remove_schedule": lambda: adapter.remove_schedule(
+            args.get("kind", "charge"), int(args["id"])
         ),
         "set_cabin_overheat_protection": lambda: adapter.set_cabin_overheat_protection(
             args["on"], args.get("fan_only", False)
@@ -529,11 +546,6 @@ async def dispatch_unguarded(
         "set_climate_keeper_mode": lambda: adapter.set_climate_keeper_mode(args["mode"]),
         "set_navigation_destination": lambda: adapter.set_navigation_destination(args["address"]),
         "set_charging_amps": lambda: adapter.set_charging_amps(int(args["amps"])),
-        "set_scheduled_departure": lambda: adapter.set_scheduled_departure(
-            args["enable"],
-            int(args.get("hour", 0)) * 60 + int(args.get("minute", 0)),
-            bool(args.get("precondition", True)),
-        ),
         "set_steering_wheel_heater": lambda: adapter.set_steering_wheel_heater(args["on"]),
         "set_volume": lambda: adapter.set_volume(float(args["level"])),
         "media_favorite": lambda: adapter.media_favorite(args["direction"]),

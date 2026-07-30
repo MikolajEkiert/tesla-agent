@@ -77,14 +77,23 @@ const META: Record<string, ToolMeta> = {
     dot: color.charge,
     describe: (i) => `${i.amps} A`,
   },
-  set_scheduled_departure: {
+  add_schedule: {
     system: "CHARGE",
     dot: color.charge,
     describe: (i) =>
-      i.enable
-        ? `departure ${String(i.hour ?? 0).padStart(2, "0")}:${String(i.minute ?? 0).padStart(2, "0")}` +
-          (i.precondition === false ? "" : " + preheat")
-        : "departure off",
+      `${i.kind === "precondition" ? "preheat" : "charge"} ` +
+      `${String(i.hour ?? 0).padStart(2, "0")}:${String(i.minute ?? 0).padStart(2, "0")}` +
+      (i.days && i.days !== "All" ? ` ${i.days}` : ""),
+  },
+  list_schedules: {
+    system: "CHARGE",
+    dot: color.charge,
+    describe: () => "read",
+  },
+  remove_schedule: {
+    system: "CHARGE",
+    dot: color.charge,
+    describe: (i) => `removed ${i.kind ?? "charge"} #${i.id}`,
   },
   set_steering_wheel_heater: {
     system: "CLIMATE",

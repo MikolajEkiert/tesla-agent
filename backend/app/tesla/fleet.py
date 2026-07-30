@@ -71,6 +71,35 @@ def _raise_for_status(r: httpx.Response, source: str) -> None:
 MILES_TO_KM = 1.609344
 
 
+def _summarise_schedules(raw: Any, time_field: str) -> list[dict[str, Any]]:
+    """Just enough of each schedule for the model to talk about it and to
+    remove the right one.
+
+    The full records carry coordinates, and the car's parking spots are the
+    owner's home and workplace — there is no reason for them to travel into a
+    model's context to answer "when do I charge".
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in raw[:10]:
+        if not isinstance(entry, dict):
+            continue
+        minutes = entry.get(time_field)
+        item: dict[str, Any] = {
+            "id": entry.get("id"),
+            "enabled": entry.get("enabled", True),
+            "days": entry.get("days_of_week"),
+            "one_time": entry.get("one_time", False),
+        }
+        if isinstance(minutes, int):
+            item["time"] = f"{minutes // 60:02d}:{minutes % 60:02d}"
+        if entry.get("name"):
+            item["name"] = _clean_label(entry["name"])
+        out.append(item)
+    return out
+
+
 def _put(target: dict[str, Any], key: str, value: Any) -> None:
     """Set only when there is something to set. Keeps "we don't know" and
     "the value is zero/false" distinguishable in the state the model reads."""
@@ -606,14 +635,6 @@ class FleetImpl:
             "map_url": f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=17/{lat}/{lon}",
         }
 
-    # --- native scheduling / comfort ---
-    async def set_scheduled_charging(
-        self, enable: bool, minutes_after_midnight: int
-    ) -> dict[str, Any]:
-        return await self._command(
-            "set_scheduled_charging", {"enable": enable, "time": minutes_after_midnight}
-        )
-
     async def set_cabin_overheat_protection(
         self, on: bool, fan_only: bool = False
     ) -> dict[str, Any]:
@@ -651,27 +672,90 @@ class FleetImpl:
         lat, lon = await self._coordinates()
         return await self._command("trigger_homelink", {"lat": lat, "lon": lon})
 
+    # --- schedules (the current API; see the note on the old commands) ---
+    #
+    # Tesla's own docs mark set_scheduled_charging and set_scheduled_departure
+    # as not recommended from firmware 2024.26 onward, pointing at these
+    # instead. This car is well past that. The new ones are a different shape
+    # rather than a rename: schedules have identities, repeat on chosen days,
+    # and are tied to a place — the car applies them when it is parked near
+    # the coordinates they were created with, which is what makes "charge
+    # overnight" mean at home rather than wherever it happens to be.
+
+    async def list_schedules(self) -> dict[str, Any]:
+        token = await self._access_token()
+        vid = await self._vehicle()
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(
+                f"{self.settings.tesla_fleet_base}/api/1/vehicles/{vid}/vehicle_data",
+                headers={"Authorization": f"Bearer {token}"},
+                # Asked for explicitly: these two are not in the default
+                # payload, and requesting only them keeps this cheap.
+                params={"endpoints": "charge_schedule_data;preconditioning_schedule_data"},
+            )
+        if r.status_code == 408:
+            raise VehicleAsleepError()
+        _raise_for_status(r, "Tesla Fleet API (schedules)")
+        data = r.json().get("response", {})
+        return {
+            "charge_schedules": _summarise_schedules(
+                data.get("charge_schedule_data", {}).get("charge_schedules", []), "start_time"
+            ),
+            "precondition_schedules": _summarise_schedules(
+                data.get("preconditioning_schedule_data", {}).get(
+                    "preconditioning_schedules", []
+                ),
+                "precondition_time",
+            ),
+        }
+
+    async def add_charge_schedule(
+        self, minutes_after_midnight: int, days: str, one_time: bool, schedule_id: int | None
+    ) -> dict[str, Any]:
+        lat, lon = await self._coordinates()
+        payload: dict[str, Any] = {
+            "days_of_week": days,
+            "enabled": True,
+            "lat": lat,
+            "lon": lon,
+            # Start time only: an end time would cap charging part-way, which
+            # is a different intention from "begin at this hour".
+            "start_enabled": True,
+            "start_time": minutes_after_midnight,
+            "end_enabled": False,
+            "one_time": one_time,
+        }
+        if schedule_id is not None:
+            payload["id"] = schedule_id
+        return await self._command("add_charge_schedule", payload)
+
+    async def add_precondition_schedule(
+        self, minutes_after_midnight: int, days: str, one_time: bool, schedule_id: int | None
+    ) -> dict[str, Any]:
+        lat, lon = await self._coordinates()
+        payload: dict[str, Any] = {
+            "days_of_week": days,
+            "enabled": True,
+            "lat": lat,
+            "lon": lon,
+            "precondition_time": minutes_after_midnight,
+            "one_time": one_time,
+        }
+        if schedule_id is not None:
+            payload["id"] = schedule_id
+        return await self._command("add_precondition_schedule", payload)
+
+    async def remove_schedule(self, kind: str, schedule_id: int) -> dict[str, Any]:
+        command = (
+            "remove_precondition_schedule"
+            if kind == "precondition"
+            else "remove_charge_schedule"
+        )
+        return await self._command(command, {"id": schedule_id})
+
     async def set_charging_amps(self, amps: int) -> dict[str, Any]:
         return await self._command("set_charging_amps", {"charging_amps": amps})
 
-    async def set_scheduled_departure(
-        self, enable: bool, minutes_after_midnight: int, precondition: bool
-    ) -> dict[str, Any]:
-        # Off-peak fields are sent explicitly rather than omitted: Tesla treats
-        # this payload as the whole setting, so leaving them out re-enables
-        # whatever the car had configured before.
-        return await self._command(
-            "set_scheduled_departure",
-            {
-                "enable": enable,
-                "departure_time": minutes_after_midnight,
-                "preconditioning_enabled": precondition,
-                "preconditioning_weekdays_only": False,
-                "off_peak_charging_enabled": False,
-                "off_peak_charging_weekdays_only": False,
-                "end_off_peak_time": 0,
-            },
-        )
 
     async def set_steering_wheel_heater(self, on: bool) -> dict[str, Any]:
         return await self._command("remote_steering_wheel_heater_request", {"on": on})
