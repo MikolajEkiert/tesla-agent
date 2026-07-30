@@ -228,6 +228,16 @@ export function primeSpeech(): void {
  *  `speaking === true` and fires nothing at all). */
 export interface SpeechHandlers {
   onEnd?: () => void;
+  /**
+   * The cloud voice could not be reached and the built-in one took over.
+   *
+   * In the chat this is deliberately ignored — mid-drive, a working answer in
+   * a worse voice is not news. The settings screen is the opposite case: there
+   * the whole point of the tap is to hear a particular voice, and silence
+   * about why a different one answered turns a quota message the server
+   * already sent into a mystery. That happened, and cost an evening.
+   */
+  onFallback?: (reason: string) => void;
 }
 
 /** In flight: the audio for the current reply is still being made. */
@@ -290,14 +300,23 @@ export function speak(text: string, language: Language, handlers?: SpeechHandler
       pending = null;
       playFile(blob, spoken, language, mine, handlers);
     })
-    .catch(() => {
+    .catch((e) => {
       if (mine !== generation) return;
       pending = null;
       // Rate limit, no signal, a 503 — the response to all of them is the
-      // same, and it is not an error message. Say the words in the other
-      // voice; the user hears a slightly worse assistant, not a broken one.
+      // same, and in the chat it is not an error message. Say the words in the
+      // other voice; the user hears a slightly worse assistant, not a broken
+      // one. The reason is handed over for anyone who asked to be told.
+      handlers?.onFallback?.(reasonOf(e));
       speakWithDevice(spoken, language, handlers);
     });
+}
+
+/** The server's own words where there are any — a BackendError carries the
+ *  API's message, which is usually the entire explanation. */
+function reasonOf(e: unknown): string {
+  const message = e instanceof Error ? e.message : String(e ?? "");
+  return message.trim() || "unknown";
 }
 
 function playFile(
@@ -328,10 +347,11 @@ function playFile(
     // failure here just ends: the text is on screen regardless.
     player.onerror = finish;
 
-    void player.play().catch(() => {
+    void player.play().catch((e) => {
       if (mine !== generation) return;
       // Refused before a single sample was heard — nothing was said yet, so
       // the fallback can say all of it.
+      handlers?.onFallback?.(reasonOf(e));
       speakWithDevice(spoken, language, handlers);
     });
   } catch {

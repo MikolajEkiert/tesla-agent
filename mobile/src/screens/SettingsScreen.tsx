@@ -60,6 +60,9 @@ export function SettingsScreen({
   // and the names the synthesiser accepts cannot drift apart. An empty list
   // (old backend, no signal) leaves just the phone voice, which still works.
   const [voices, setVoices] = useState<string[]>([]);
+  // Why the phone answered instead of the voice that was tapped. Null until
+  // something actually goes wrong, so the screen stays quiet when it works.
+  const [fallbackReason, setFallbackReason] = useState<string | null>(null);
   useEffect(() => {
     fetchVoices()
       .then((v) => setVoices(v.voices))
@@ -77,7 +80,10 @@ export function SettingsScreen({
     primeSpeech();
     onVoiceChange(option);
     setActiveVoice(option);
-    speak(t("speechVoiceSample"), language);
+    setFallbackReason(null);
+    speak(t("speechVoiceSample"), language, {
+      onFallback: setFallbackReason,
+    });
   };
   // Safari fills the voice list asynchronously, so this can be null on the
   // first render and correct a moment later.
@@ -198,6 +204,11 @@ export function SettingsScreen({
                   })}
                 </View>
                 <Text style={styles.hint}>{t("speechVoiceHint")}</Text>
+                {fallbackReason && (
+                  <Text style={styles.voiceFallback}>
+                    {t("speechVoiceFallback", { reason: fallbackReason })}
+                  </Text>
+                )}
                 {voiceChoice === "device" && (
                   <>
                     {voiceName && (
@@ -355,6 +366,15 @@ const styles = StyleSheet.create({
   voiceChipTextActive: {
     color: color.bg,
     fontFamily: font.bodySemiBold,
+  },
+  // Monospaced like the voice name below it: this is diagnostic text, and it
+  // should read as the machine reporting rather than the app apologising. The
+  // accent palette is reserved for vehicle systems, so it stays neutral.
+  voiceFallback: {
+    fontFamily: font.mono,
+    fontSize: 11,
+    color: color.textSecondary,
+    marginTop: space.sm,
   },
   voiceName: {
     fontFamily: font.mono,

@@ -40,22 +40,22 @@ SAMPLE_RATE = 24000
 # paid API from a request body, so it is validated here and an unknown value
 # falls back to the default instead of travelling onward.
 #
-# The set is deliberately small: these are the calm, conversational ones. The
-# full catalogue has thirty, most of them characters — breathy, upbeat, bright
-# — that wear badly on a voice you hear every day in a car.
+# The set is deliberately small. The full catalogue has thirty, and a list that
+# long is a chore to audition when the difference between neighbours is slight
+# and only audible on a real sentence.
 VOICES = {
-    "Charon",     # informative, low
-    "Iapetus",    # clear
-    "Algieba",    # smooth
-    "Umbriel",    # easy-going
-    "Achird",     # friendly
-    "Enceladus",  # breathy, soft
-    "Kore",       # firm
-    "Leda",       # youthful
-    "Aoede",      # breezy
+    # Chosen by ear by the owner.
+    "Puck",            # upbeat
+    "Rasalgethi",      # informative
+    "Zubenelgenubi",   # casual
+    # Female counterparts, so the choice is not one-sided. They cost exactly
+    # the same: price here follows seconds of audio, not which voice said it.
+    "Leda",            # youthful, light
+    "Sulafat",         # warm
+    "Vindemiatrix",    # gentle
 }
 
-DEFAULT_VOICE = "Charon"
+DEFAULT_VOICE = "Puck"
 
 # The delivery note. This is the whole reason a cloud voice is worth the
 # round trip: without it the model reads a list of numbers like a newsreader,

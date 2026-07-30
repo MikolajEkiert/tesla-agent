@@ -97,6 +97,7 @@ const STRINGS = {
       "Tap a voice to hear it. The phone's own voice needs no signal, so Amp falls back to it whenever the better one can't be reached.",
     speechVoiceSample:
       "The car has sixty-three percent battery, two hundred and ten kilometres of range. Nearest Supercharger is four kilometres away.",
+    speechVoiceFallback: "Phone voice used — {reason}",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -189,6 +190,7 @@ const STRINGS = {
       "Dotknij głosu, żeby go usłyszeć. Głos telefonu nie potrzebuje zasięgu, więc Amp wraca do niego zawsze, gdy lepszy jest nieosiągalny.",
     speechVoiceSample:
       "Auto ma sześćdziesiąt trzy procent baterii, zasięg dwieście dziesięć kilometrów. Najbliższy Supercharger jest cztery kilometry stąd.",
+    speechVoiceFallback: "Zadziałał głos telefonu — {reason}",
   },
 } as const;
 
