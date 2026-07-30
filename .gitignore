@@ -17,3 +17,6 @@ deploy/caddy_config/
 
 # Handoff / scratch planning docs — working notes only, never committed
 HANDOFF.md
+
+# Basic-auth credentials guarding the site (bcrypt hash)
+deploy/.env.auth
