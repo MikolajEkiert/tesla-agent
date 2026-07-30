@@ -222,6 +222,32 @@ class MockImpl:
         return {"ok": True, "charging_amps": amps}
 
 
+    async def set_preconditioning_max(self, on: bool) -> dict[str, Any]:
+        self._state["max_defrost"] = on
+        return {"ok": True, "max_defrost": on}
+
+    async def set_cop_temp(self, level: str) -> dict[str, Any]:
+        self._state["cop_temp"] = level
+        return {"ok": True, "cop_temp": level}
+
+    async def recent_alerts(self) -> dict[str, Any]:
+        return {"alerts": []}
+
+    async def release_notes(self) -> dict[str, Any]:
+        return {
+            "version": "2026.20.1 mock",
+            "notes": [{"title": "Mock release", "description": "Nothing really changed."}],
+        }
+
+    async def charging_history(self) -> dict[str, Any]:
+        return {
+            "sessions": [
+                {"site": "Supercharger Kraków", "started": "2026-07-20T21:14:00Z",
+                 "kwh": 38.4, "cost": 61.2},
+                {"site": "Dom", "started": "2026-07-18T23:02:00Z", "kwh": 21.0, "cost": 12.9},
+            ]
+        }
+
     async def set_steering_wheel_heater(self, on: bool) -> dict[str, Any]:
         self._state["steering_wheel_heater"] = on
         return {"ok": True, "steering_wheel_heater": on}

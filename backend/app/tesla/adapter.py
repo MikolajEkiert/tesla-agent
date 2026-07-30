@@ -147,6 +147,28 @@ class TeslaAdapter(ABC):
 
     # --- comfort ---
     @abstractmethod
+    async def set_preconditioning_max(self, on: bool) -> dict[str, Any]:
+        """Max defrost — everything at full to clear glass fast."""
+
+    @abstractmethod
+    async def set_cop_temp(self, level: str) -> dict[str, Any]:
+        """level in {low, medium, high}: the threshold cabin overheat
+        protection acts at, as opposed to whether it is on at all."""
+
+    # --- diagnostics the car keeps ---
+    @abstractmethod
+    async def recent_alerts(self) -> dict[str, Any]:
+        """What the car itself has been complaining about."""
+
+    @abstractmethod
+    async def release_notes(self) -> dict[str, Any]:
+        """What a pending or just-installed update actually changes."""
+
+    @abstractmethod
+    async def charging_history(self) -> dict[str, Any]:
+        """Past charging sessions with what they cost."""
+
+    @abstractmethod
     async def set_steering_wheel_heater(self, on: bool) -> dict[str, Any]:
         """Cars without the hardware reject this; the error is relayed rather
         than guessed at here, since trim levels vary."""

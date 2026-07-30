@@ -29,7 +29,7 @@ import httpx
 
 from app.auth.oauth import TokenStore
 from app.config import get_settings
-from app.geo import reverse_geocode
+from app.geo import clean_text, reverse_geocode
 
 # Mode numbers come from the proxy's own dispatch table (pkg/proxy/command.go).
 CLIMATE_KEEPER_MODES = {"off": 0, "on": 1, "dog": 2, "camp": 3}
@@ -759,6 +759,103 @@ class FleetImpl:
 
     async def set_steering_wheel_heater(self, on: bool) -> dict[str, Any]:
         return await self._command("remote_steering_wheel_heater_request", {"on": on})
+
+    async def set_preconditioning_max(self, on: bool) -> dict[str, Any]:
+        # `manual_override` mirrors the car's own max-defrost button, which
+        # overrides whatever the climate was doing rather than blending with it.
+        return await self._command(
+            "set_preconditioning_max", {"on": on, "manual_override": on}
+        )
+
+    async def set_cop_temp(self, level: str) -> dict[str, Any]:
+        return await self._command(
+            "set_cop_temp", {"cop_temp": {"low": 0, "medium": 1, "high": 2}.get(level, 1)}
+        )
+
+    async def recent_alerts(self) -> dict[str, Any]:
+        data = await self._get_json("recent_alerts", "recent alerts")
+        alerts = data.get("recent_alerts")
+        if not isinstance(alerts, list):
+            return {"alerts": []}
+        # Newest first and capped: the car keeps a long tail of these, and a
+        # wall of them in the model's context buys nothing over the handful
+        # that are current.
+        return {
+            "alerts": [
+                {
+                    "name": _clean_label(a.get("name")),
+                    "time": a.get("time"),
+                    "audience": a.get("audience"),
+                }
+                for a in alerts[:10]
+                if isinstance(a, dict)
+            ]
+        }
+
+    async def release_notes(self) -> dict[str, Any]:
+        data = await self._get_json("release_notes", "release notes")
+        notes = data.get("release_notes")
+        if not isinstance(notes, list):
+            return {"notes": []}
+        return {
+            "version": data.get("version"),
+            "notes": [
+                {
+                    "title": _clean_label(n.get("title")),
+                    # Longer than a label: this is the one place a paragraph is
+                    # the answer rather than a name to be shortened.
+                    "description": clean_text(n.get("description"), 400),
+                }
+                for n in notes[:8]
+                if isinstance(n, dict)
+            ],
+        }
+
+    async def charging_history(self) -> dict[str, Any]:
+        """Sessions and what they cost.
+
+        Account-scoped rather than vehicle-scoped — a different path shape from
+        everything else here, and it never needs the car awake.
+        """
+        token = await self._access_token()
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(
+                f"{self.settings.tesla_fleet_base}/api/1/dx/charging/history",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        _raise_for_status(r, "Tesla Fleet API (charging history)")
+        raw = r.json().get("response", {})
+        sessions = raw.get("data") if isinstance(raw, dict) else raw
+        if not isinstance(sessions, list):
+            return {"sessions": []}
+        return {
+            "sessions": [
+                {
+                    "site": _clean_label(s.get("siteLocationName")),
+                    "started": s.get("chargeStartDateTime"),
+                    "kwh": s.get("energyUsed") or s.get("unitOfMeasureEnergy"),
+                    "cost": s.get("totalCost") or s.get("fees"),
+                }
+                for s in sessions[:20]
+                if isinstance(s, dict)
+            ]
+        }
+
+    async def _get_json(self, endpoint: str, what: str) -> dict[str, Any]:
+        """A plain vehicle-scoped GET. Never wakes the car: these are things
+        the car reported earlier, and waking it to read them would cost battery
+        to learn nothing new."""
+        token = await self._access_token()
+        vid = await self._vehicle()
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(
+                f"{self.settings.tesla_fleet_base}/api/1/vehicles/{vid}/{endpoint}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        if r.status_code == 408:
+            raise VehicleAsleepError()
+        _raise_for_status(r, f"Tesla Fleet API ({what})")
+        return r.json().get("response", {}) or {}
 
     async def schedule_software_update(self, delay_seconds: int) -> dict[str, Any]:
         return await self._command(

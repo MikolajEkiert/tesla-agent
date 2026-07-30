@@ -444,6 +444,64 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "set_preconditioning_max",
+        "description": (
+            "Max defrost: everything at full to clear frozen or fogged glass "
+            "quickly. Turn it off again once the windows are clear — it is "
+            "loud and drains the battery faster than ordinary climate."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"on": {"type": "boolean"}},
+            "required": ["on"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "set_cop_temp",
+        "description": (
+            "The temperature at which cabin overheat protection kicks in: low "
+            "(about 30°C), medium (35°C) or high (40°C). This does not switch "
+            "the protection on — set_cabin_overheat_protection does that."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"level": {"type": "string", "enum": ["low", "medium", "high"]}},
+            "required": ["level"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "recent_alerts",
+        "description": (
+            "Faults and warnings the car itself has recorded. Use this for "
+            "'is everything OK with the car'. An empty list means it has not "
+            "reported anything — say that, rather than declaring the car "
+            "healthy, which is a stronger claim than the data supports."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "release_notes",
+        "description": (
+            "What the pending or most recent software update changes. Pairs "
+            "with software_update: read this before installing so the owner "
+            "knows what they are agreeing to."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "charging_history",
+        "description": (
+            "Past charging sessions with where, how much energy and what it "
+            "cost. Answers 'how much have I spent on charging' and 'where did "
+            "I last charge'. Sum only the sessions returned and say what "
+            "period they cover — the list is recent history, not the whole "
+            "account."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
         "name": "set_steering_wheel_heater",
         "description": (
             "Turn the heated steering wheel on or off. Not every car has the "
@@ -636,6 +694,11 @@ async def dispatch_unguarded(
         "set_route": lambda: _send_route(adapter, args.get("stops") or []),
         "set_charging_amps": lambda: adapter.set_charging_amps(int(args["amps"])),
         "set_steering_wheel_heater": lambda: adapter.set_steering_wheel_heater(args["on"]),
+        "set_preconditioning_max": lambda: adapter.set_preconditioning_max(args["on"]),
+        "set_cop_temp": lambda: adapter.set_cop_temp(args["level"]),
+        "recent_alerts": lambda: adapter.recent_alerts(),
+        "release_notes": lambda: adapter.release_notes(),
+        "charging_history": lambda: adapter.charging_history(),
         "set_volume": lambda: adapter.set_volume(float(args["level"])),
         "media_favorite": lambda: adapter.media_favorite(args["direction"]),
         "software_update": lambda: (
