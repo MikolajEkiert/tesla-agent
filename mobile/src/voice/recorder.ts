@@ -15,6 +15,7 @@
  * Web-only. On native there is no getUserMedia and the keyboard's own dictation
  * key already covers voice input.
  */
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export const SAMPLE_RATE = 16000;
 
@@ -34,6 +35,38 @@ export function voiceInputSupported(): boolean {
     !!navigator.mediaDevices?.getUserMedia &&
     !!(window.AudioContext || (window as any).webkitAudioContext)
   );
+}
+
+const BARGE_IN_KEY = "amp.bargein";
+
+/**
+ * Whether the microphone stays open while the assistant is talking, so
+ * starting to speak cuts it off — instead of only a tap doing that.
+ *
+ * Defaults on, but this is the one voice setting in the app that rests
+ * entirely on the browser's own echo cancellation being good enough that the
+ * mic doesn't hear the reply coming out of the same phone's speaker and
+ * mistake it for someone talking. Nothing here can guarantee that for every
+ * phone and every car speaker — the fix for a pairing that echoes badly is
+ * switching this off, not code.
+ */
+export async function loadBargeIn(): Promise<boolean> {
+  try {
+    const stored = await AsyncStorage.getItem(BARGE_IN_KEY);
+    if (stored === "0") return false;
+    if (stored === "1") return true;
+  } catch {
+    // storage unavailable — the default stands
+  }
+  return true;
+}
+
+export async function saveBargeIn(enabled: boolean): Promise<void> {
+  try {
+    await AsyncStorage.setItem(BARGE_IN_KEY, enabled ? "1" : "0");
+  } catch {
+    // best-effort persistence only
+  }
 }
 
 /** Linear resample. The browser is free to ignore a requested sample rate —
@@ -96,6 +129,19 @@ export interface Endpointing {
   silenceMs: number;
 }
 
+/**
+ * Fires once, the first time the level has held above threshold for a full
+ * sustainMs — not on the first loud frame. A door closing or a bump in the
+ * road is a spike; a word held over it is not. This is the primitive a
+ * barge-in listener watches: unlike Endpointing, it looks for the *start* of
+ * speech rather than the silence after it, and it never stops the recording
+ * itself — the caller decides what a genuine interruption means to do.
+ */
+export interface Onset {
+  threshold: number;
+  sustainMs: number;
+}
+
 export class VoiceRecorder {
   private stream: MediaStream | null = null;
   private context: AudioContext | null = null;
@@ -106,10 +152,16 @@ export class VoiceRecorder {
   private stopping = false;
   private hasSpeech = false;
   private lastVoiceAt = 0;
+  private onsetStartAt: number | null = null;
+  private onsetFired = false;
 
   /** Set before start(). Unset, the recorder only ever stops on release or
    *  MAX_SECONDS, which is the existing hold-to-talk behaviour. */
   endpointing?: Endpointing;
+
+  /** Set before start() to watch for a speech onset without affecting when
+   *  the recording itself stops — see Onset above. */
+  onset?: Onset;
 
   /** Peak level of the most recent frame, 0..1 — drives the "it's hearing
    *  you" affordance, which is the difference between a dead button and a
@@ -120,6 +172,9 @@ export class VoiceRecorder {
    *  silence — rather than by a caller releasing it. The UI treats both the
    *  same way: stop showing "listening" and move on. */
   onAutoStop?: () => void;
+
+  /** Fired once when `onset` conditions are met. */
+  onOnset?: () => void;
 
   async start(): Promise<void> {
     if (!voiceInputSupported()) throw new VoiceUnavailableError("no microphone API");
@@ -143,6 +198,8 @@ export class VoiceRecorder {
     this.stopping = false;
     this.hasSpeech = false;
     this.lastVoiceAt = 0;
+    this.onsetStartAt = null;
+    this.onsetFired = false;
     this.source = this.context!.createMediaStreamSource(this.stream);
     this.node = await this.buildNode();
     this.source.connect(this.node);
@@ -191,6 +248,19 @@ export class VoiceRecorder {
         this.stopping = true;
         this.onAutoStop?.();
         return;
+      }
+    }
+
+    if (this.onset && !this.onsetFired) {
+      const now = Date.now();
+      if (peak >= this.onset.threshold) {
+        if (this.onsetStartAt === null) this.onsetStartAt = now;
+        else if (now - this.onsetStartAt >= this.onset.sustainMs) {
+          this.onsetFired = true;
+          this.onOnset?.();
+        }
+      } else {
+        this.onsetStartAt = null;
       }
     }
 

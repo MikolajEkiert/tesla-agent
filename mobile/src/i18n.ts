@@ -103,6 +103,11 @@ const STRINGS = {
     conversationThinking: "Thinking…",
     conversationSpeaking: "Speaking — tap to interrupt",
     conversationEnd: "End conversation",
+    conversationBargeInSection: "Interrupting a reply",
+    conversationBargeInOn: "By voice",
+    conversationBargeInOff: "Tap only",
+    conversationBargeInHint:
+      "\"By voice\" keeps the microphone open while the assistant talks, so starting to speak cuts it off — same as Grok or Gemini. It relies on the phone's own echo cancellation, which isn't equally good on every phone and speaker. If replies start cutting themselves off for no reason, switch to \"Tap only\".",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -201,6 +206,11 @@ const STRINGS = {
     conversationThinking: "Myślę…",
     conversationSpeaking: "Mówię — dotknij, aby przerwać",
     conversationEnd: "Zakończ rozmowę",
+    conversationBargeInSection: "Przerywanie odpowiedzi",
+    conversationBargeInOn: "Głosem",
+    conversationBargeInOff: "Tylko dotknięciem",
+    conversationBargeInHint:
+      "„Głosem” trzyma mikrofon otwarty, gdy asystent mówi, więc zaczęcie mówienia go przerywa — tak jak w Groku czy Gemini. Polega na anulowaniu echa w telefonie, które nie na każdym telefonie i głośniku działa tak samo dobrze. Jeśli odpowiedzi zaczną się urywać bez powodu, przełącz na „Tylko dotknięciem”.",
   },
 } as const;
 

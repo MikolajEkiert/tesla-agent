@@ -45,7 +45,13 @@ import {
   type SpeechMode,
   type VoiceChoice,
 } from "../voice/speak";
-import { NothingRecordedError, VoiceRecorder, voiceInputSupported } from "../voice/recorder";
+import {
+  loadBargeIn,
+  NothingRecordedError,
+  saveBargeIn,
+  VoiceRecorder,
+  voiceInputSupported,
+} from "../voice/recorder";
 import type { ChatItem, ScheduledAction, VehicleState } from "../types";
 
 /** How long a hush has to hold, once the driver has started talking, before a
@@ -57,6 +63,22 @@ const CONVERSATION_SILENCE_MS = 1100;
 /** Below this a frame counts as road noise, not the start of an answer. Well
  *  above the 0.005 the recorder itself treats as "recorded nothing at all". */
 const CONVERSATION_SPEECH_THRESHOLD = 0.02;
+
+/**
+ * Peak level that counts as a deliberate interruption while the assistant is
+ * talking, rather than its own reply leaking back through imperfect echo
+ * cancellation. Set well above CONVERSATION_SPEECH_THRESHOLD on purpose:
+ * residual echo after cancellation is usually much quieter than near-field
+ * speech, but "usually" is doing real work in that sentence — this is a
+ * starting guess, not a measurement, and the Settings toggle exists because
+ * of exactly that uncertainty.
+ */
+const BARGE_IN_THRESHOLD = 0.15;
+
+/** How long the level has to hold above that threshold before it counts as a
+ *  real interruption — filters out a single loud click (a door, a bump) that
+ *  a spoken sentence would not produce. */
+const BARGE_IN_SUSTAIN_MS = 250;
 
 /** Countdowns in the drawer would otherwise sit frozen while it's open. */
 const QUEUE_POLL_MS = 15000;
@@ -101,16 +123,24 @@ export function ChatScreen({
   const [conversationActive, setConversationActive] = useState(false);
   const [conversationPhase, setConversationPhase] = useState<ConversationPhase>("listening");
   const [conversationLevel, setConversationLevel] = useState(0);
+  const [bargeInEnabled, setBargeInEnabled] = useState(true);
   // Mirrors conversationActive for code that runs outside React's render
   // cycle — a recorder's onAutoStop, a speak() callback fired seconds later —
   // where state from the render that scheduled it may already be stale.
   const conversationActiveRef = useRef(false);
   const conversationRecorderRef = useRef<VoiceRecorder | null>(null);
+  // A second, parallel microphone session that runs only while a reply is
+  // being spoken — its one job is noticing a real interruption. Separate from
+  // conversationRecorderRef because the two exist at different times and mean
+  // different things: this one detects, that one captures.
+  const bargeInWatcherRef = useRef<VoiceRecorder | null>(null);
   // Indirection so handleSend's useCallback deps don't have to include
   // functions that are themselves redefined every render (and that in turn
   // call handleSend) — that pair would otherwise be circular.
   const listenAgainRef = useRef<() => void>(() => {});
   const stopConversationRef = useRef<() => void>(() => {});
+  const startBargeInWatcherRef = useRef<() => void>(() => {});
+  const stopBargeInWatcherRef = useRef<() => void>(() => {});
 
   const refreshVehicle = useCallback(() => {
     fetchVehicleState()
@@ -140,12 +170,14 @@ export function ChatScreen({
       setVoiceChoice(choice);
       setActiveVoice(choice);
     });
+    loadBargeIn().then(setBargeInEnabled);
     // Leaving the screen mid-sentence should not leave a voice talking to an
     // empty room — the synthesiser outlives the component otherwise. Same
-    // reasoning for a conversation's open microphone.
+    // reasoning for a conversation's open microphone, capturing or watching.
     return () => {
       stopSpeaking();
       conversationRecorderRef.current?.cancel();
+      bargeInWatcherRef.current?.cancel();
     };
   }, [refreshVehicle, refreshScheduled]);
 
@@ -179,6 +211,18 @@ export function ChatScreen({
     setVoiceChoice(choice);
     setActiveVoice(choice);
     saveVoiceChoice(choice);
+  }, []);
+
+  const changeBargeIn = useCallback((enabled: boolean) => {
+    setBargeInEnabled(enabled);
+    saveBargeIn(enabled);
+    // Switching it off mid-reply should stop watching immediately, not just
+    // for the next turn — otherwise "Tap only" would silently not apply
+    // until the conversation loop happened to restart.
+    if (!enabled) {
+      bargeInWatcherRef.current?.cancel();
+      bargeInWatcherRef.current = null;
+    }
   }, []);
 
   const changeSpeechMode = useCallback(
@@ -274,11 +318,21 @@ export function ChatScreen({
           // leave the first moments unstoppable, and some engines never send
           // one at all. The watchdog below clears it either way.
           setSpeaking(true);
-          if (conversationTurn) setConversationPhase("speaking");
+          if (conversationTurn) {
+            setConversationPhase("speaking");
+            startBargeInWatcherRef.current();
+          }
           speak(res.reply, language, {
             onEnd: () => {
               setSpeaking(false);
-              if (conversationTurn) listenAgainRef.current();
+              if (conversationTurn) {
+                // Reached the end without an interruption — nothing left to
+                // watch for. If a barge-in ended the reply early instead, this
+                // callback never runs at all: halt() bumps speak.ts's
+                // generation, and a stopped reply's own onEnd is suppressed.
+                stopBargeInWatcherRef.current();
+                listenAgainRef.current();
+              }
             },
           });
         }
@@ -320,6 +374,8 @@ export function ChatScreen({
         onSpeechModeChange={changeSpeechMode}
         voiceChoice={voiceChoice}
         onVoiceChange={changeVoice}
+        bargeInEnabled={bargeInEnabled}
+        onBargeInChange={changeBargeIn}
       />
     );
   }
@@ -338,9 +394,38 @@ export function ChatScreen({
   // render to whichever closure is current. Plain functions sidestep the
   // circular-dependency problem a useCallback chain here would otherwise have.
 
+  const stopBargeInWatcher = () => {
+    bargeInWatcherRef.current?.cancel();
+    bargeInWatcherRef.current = null;
+  };
+  stopBargeInWatcherRef.current = stopBargeInWatcher;
+
+  const startBargeInWatcher = () => {
+    if (!bargeInEnabled) return;
+    const watcher = new VoiceRecorder();
+    watcher.onset = { threshold: BARGE_IN_THRESHOLD, sustainMs: BARGE_IN_SUSTAIN_MS };
+    watcher.onOnset = () => {
+      // A real interruption: stop the reply immediately and start capturing
+      // the sentence that cut it off — the same action a tap on the bar
+      // already performs, just triggered by a voice instead of a finger.
+      stopBargeInWatcher();
+      halt();
+      listenAgain();
+    };
+    bargeInWatcherRef.current = watcher;
+    watcher.start().catch(() => {
+      // No mic to spare, or permission got pulled mid-reply. The reply just
+      // finishes normally and a tap still interrupts it — barge-in silently
+      // isn't available for this one turn rather than breaking the loop.
+      bargeInWatcherRef.current = null;
+    });
+  };
+  startBargeInWatcherRef.current = startBargeInWatcher;
+
   const stopConversation = () => {
     conversationActiveRef.current = false;
     setConversationActive(false);
+    stopBargeInWatcher();
     conversationRecorderRef.current?.cancel();
     conversationRecorderRef.current = null;
     halt();
@@ -422,10 +507,11 @@ export function ChatScreen({
       // gives for free by construction.
       void finishConversationTurn();
     } else if (conversationPhase === "speaking") {
-      // The nearest thing to talking over it this architecture can offer: no
-      // echo cancellation across an arbitrary car speaker means the mic can't
-      // safely stay open *while* the reply plays, so a tap stands in for a
-      // voice that would otherwise go undetected.
+      // Manual interrupt — works the same whether or not voice barge-in is
+      // on, and is the only way to interrupt at all when it's off (see the
+      // Settings toggle: echo cancellation isn't reliable on every phone and
+      // car speaker, so this stays available regardless).
+      stopBargeInWatcher();
       halt();
       listenAgain();
     }

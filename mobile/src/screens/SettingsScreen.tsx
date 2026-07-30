@@ -30,6 +30,7 @@ import {
   type SpeechMode,
   type VoiceChoice,
 } from "../voice/speak";
+import { voiceInputSupported } from "../voice/recorder";
 
 const LANGUAGES: { code: Language; labelKey: "langEnglish" | "langPolish" }[] = [
   { code: "en", labelKey: "langEnglish" },
@@ -48,12 +49,16 @@ export function SettingsScreen({
   onSpeechModeChange,
   voiceChoice,
   onVoiceChange,
+  bargeInEnabled,
+  onBargeInChange,
 }: {
   onClose: () => void;
   speechMode: SpeechMode;
   onSpeechModeChange: (mode: SpeechMode) => void;
   voiceChoice: VoiceChoice;
   onVoiceChange: (voice: VoiceChoice) => void;
+  bargeInEnabled: boolean;
+  onBargeInChange: (enabled: boolean) => void;
 }) {
   const { language, setLanguage, t } = useLanguage();
   // Served by the backend rather than listed here, so the names the app offers
@@ -227,6 +232,36 @@ export function SettingsScreen({
                 )}
               </>
             )}
+          </>
+        )}
+
+        {voiceInputSupported() && (
+          <>
+            <Text style={[styles.label, styles.sectionGap]}>
+              {t("conversationBargeInSection")}
+            </Text>
+            <View style={styles.segmented}>
+              {(
+                [
+                  { value: true, labelKey: "conversationBargeInOn" },
+                  { value: false, labelKey: "conversationBargeInOff" },
+                ] as const
+              ).map(({ value, labelKey }) => {
+                const active = value === bargeInEnabled;
+                return (
+                  <Pressable
+                    key={String(value)}
+                    onPress={() => onBargeInChange(value)}
+                    style={[styles.segment, active && styles.segmentActive]}
+                  >
+                    <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                      {t(labelKey)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={styles.hint}>{t("conversationBargeInHint")}</Text>
           </>
         )}
 
