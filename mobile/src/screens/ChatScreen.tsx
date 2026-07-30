@@ -60,18 +60,25 @@ import type { ChatItem, ScheduledAction, VehicleState } from "../types";
  *  like it stopped listening. */
 const CONVERSATION_SILENCE_MS = 1100;
 
-/** Below this a frame counts as road noise, not the start of an answer. Well
- *  above the 0.005 the recorder itself treats as "recorded nothing at all". */
-const CONVERSATION_SPEECH_THRESHOLD = 0.02;
+/** Level under which the cabin counts as quiet, for deciding the speaker has
+ *  finished. Deliberately only a loudness figure: whether any of it was
+ *  *speech* is a different question, decided on frequency content in
+ *  voice/vad.ts, because loud and spoken are not the same thing — hitting the
+ *  seat proved it by producing a command nobody said. */
+const CONVERSATION_QUIET_LEVEL = 0.02;
 
-/** How long the level has to hold above that threshold before it counts as
- *  speech actually starting. Without this, a single loud frame — a bump, a
- *  gear click, a door — used to be enough to mark the whole recording as
- *  "contained speech", which meant an empty turn (nobody said anything,
- *  MAX_SECONDS just ran out on cabin noise) could still reach the
- *  transcriber. Short enough that it adds no perceptible delay to a real
- *  sentence starting. */
-const CONVERSATION_SPEECH_SUSTAIN_MS = 150;
+/** How long to hold the microphone open for a turn where nothing resembling
+ *  speech ever arrives, before handing back an empty turn and listening
+ *  again. Without it such a turn runs to MAX_SECONDS — half a minute of dead
+ *  air in the middle of a conversation. */
+const CONVERSATION_NO_SPEECH_MS = 8000;
+
+/** Empty turns in a row before the conversation closes itself. Without it the
+ *  loop listens forever: a phone left in a parked car keeps the microphone
+ *  open, the recording indicator lit, and the loop spinning, long after
+ *  whoever started it has walked away. Three turns is about half a minute of
+ *  nothing — enough to survive a red light or a thought mid-sentence. */
+const CONVERSATION_MAX_EMPTY_TURNS = 3;
 
 /**
  * Peak level that counts as a deliberate interruption while the assistant is
@@ -143,6 +150,8 @@ export function ChatScreen({
   // conversationRecorderRef because the two exist at different times and mean
   // different things: this one detects, that one captures.
   const bargeInWatcherRef = useRef<VoiceRecorder | null>(null);
+  // Consecutive turns where nothing was said. Reset by any real transcript.
+  const emptyTurnsRef = useRef(0);
   // Indirection so handleSend's useCallback deps don't have to include
   // functions that are themselves redefined every render (and that in turn
   // call handleSend) — that pair would otherwise be circular.
@@ -451,9 +460,9 @@ export function ChatScreen({
     setConversationLevel(0);
     const recorder = new VoiceRecorder();
     recorder.endpointing = {
-      speechThreshold: CONVERSATION_SPEECH_THRESHOLD,
-      speechSustainMs: CONVERSATION_SPEECH_SUSTAIN_MS,
+      quietLevel: CONVERSATION_QUIET_LEVEL,
       silenceMs: CONVERSATION_SILENCE_MS,
+      noSpeechTimeoutMs: CONVERSATION_NO_SPEECH_MS,
     };
     recorder.onLevel = setConversationLevel;
     recorder.onAutoStop = () => void finishConversationTurn();
@@ -467,6 +476,16 @@ export function ChatScreen({
   };
   listenAgainRef.current = listenAgain;
 
+  /** Nothing was said this turn. Listen again, but not forever. */
+  const emptyTurn = () => {
+    emptyTurnsRef.current += 1;
+    if (emptyTurnsRef.current >= CONVERSATION_MAX_EMPTY_TURNS) {
+      stopConversation();
+      return;
+    }
+    listenAgain();
+  };
+
   const finishConversationTurn = async () => {
     const recorder = conversationRecorderRef.current;
     if (!recorder) return;
@@ -476,18 +495,19 @@ export function ChatScreen({
       const blob = await recorder.stop();
       const text = (await transcribe(blob, language)).trim();
       if (!text) {
-        // Endpointing fired but the transcript came back empty — a cough, a
-        // door closing. Not a reason to end the conversation, just to listen
-        // again.
-        listenAgain();
+        // The recording had speech-shaped audio in it but the transcriber
+        // returned nothing — either it genuinely heard no words, or the
+        // backend's own audio check rejected it. Either way, nobody spoke.
+        emptyTurn();
         return;
       }
+      emptyTurnsRef.current = 0;
       await handleSend(text, true, true);
     } catch (e) {
       if (e instanceof NothingRecordedError) {
         // Silence the whole turn, or a recording too short to be speech —
-        // ordinary in a car (a red light, a thought interrupted). Keep going.
-        listenAgain();
+        // ordinary in a car (a red light, a thought interrupted).
+        emptyTurn();
       } else if (e instanceof NotUnlockedError) {
         stopConversation();
         onLocked?.();
@@ -502,6 +522,7 @@ export function ChatScreen({
   const startConversation = () => {
     if (!voiceInputSupported() || conversationActiveRef.current) return;
     setError(null);
+    emptyTurnsRef.current = 0;
     // Still inside the tap, which is the only moment iOS lets us unlock
     // speech — every later turn in the loop plays without one.
     primeSpeech();

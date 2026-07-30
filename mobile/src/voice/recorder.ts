@@ -16,6 +16,7 @@
  * key already covers voice input.
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { BLOCK_SIZE, classifyBlock, HOP_SIZE, SPEECH_EVIDENCE } from "./vad";
 
 export const SAMPLE_RATE = 16000;
 
@@ -117,25 +118,29 @@ function encodeWav(samples: Float32Array, sampleRate: number): Blob {
  * Stop listening on its own once the speaker has clearly finished, instead of
  * waiting for a finger to lift.
  *
- * A single peak threshold is not enough by itself — silence *before* any
- * speech is just "hasn't started yet", not "done talking" — so this only
- * starts the silence clock once the level has *held* above threshold for
- * speechSustainMs, not on the first loud frame. That distinction turned out
- * to matter for more than false starts: a single frame over threshold — a
- * bump, a gear click, a door — used to be enough to mark the recording as
- * "contained speech" for good, which meant a conversation turn with nothing
- * actually said in it could still end up transcribed instead of discarded.
- * See stop() below for the other half of that fix.
+ * Two separate questions get asked here, and conflating them was a bug:
+ *
+ *   "has the talking stopped?" — a loudness question, answered by
+ *   `quietLevel` below. Cheap, and right: when someone stops speaking the
+ *   level drops, whatever the frequency content was.
+ *
+ *   "was any of this speech at all?" — *not* a loudness question. Hitting the
+ *   seat is loud, sustained, and passed an amplitude-only check, producing a
+ *   recording that the transcriber turned into a command nobody spoke. That
+ *   one is answered in vad.ts, on frequency content, and read back in stop().
  */
 export interface Endpointing {
-  /** Peak level, 0..1, that counts as speech rather than road noise. */
-  speechThreshold: number;
-  /** How long the level has to hold above threshold before it counts as
-   *  speech actually starting, rather than a single loud instant. */
-  speechSustainMs: number;
+  /** Level below which the recording counts as quiet, for deciding the
+   *  speaker has finished. Not a speech test — see the note above. */
+  quietLevel: number;
   /** How long a hush has to hold, after speech was heard, before it reads as
    *  a finished sentence rather than a breath between words. */
   silenceMs: number;
+  /** Give up and hand back an empty turn if nothing resembling speech has
+   *  arrived by now. Without it, a turn where nobody spoke sits with the
+   *  microphone open until MAX_SECONDS — thirty seconds of dead air before
+   *  the conversation loop gets its next go. */
+  noSpeechTimeoutMs: number;
 }
 
 /**
@@ -159,9 +164,13 @@ export class VoiceRecorder {
   private chunks: Float32Array[] = [];
   private frames = 0;
   private stopping = false;
-  private hasSpeech = false;
-  private lastVoiceAt = 0;
-  private speechOnsetAt: number | null = null;
+  private lastLoudAt = 0;
+  private startedAt = 0;
+  // Evidence accumulators, counted in samples so they measure recorded audio
+  // rather than wall-clock scheduling. See vad.ts for what each one means.
+  private inBandSamples = 0;
+  private consonantSamples = 0;
+  private pendingBlock: Float32Array | null = null;
   private onsetStartAt: number | null = null;
   private onsetFired = false;
 
@@ -206,9 +215,11 @@ export class VoiceRecorder {
     this.chunks = [];
     this.frames = 0;
     this.stopping = false;
-    this.hasSpeech = false;
-    this.lastVoiceAt = 0;
-    this.speechOnsetAt = null;
+    this.lastLoudAt = 0;
+    this.startedAt = Date.now();
+    this.inBandSamples = 0;
+    this.consonantSamples = 0;
+    this.pendingBlock = null;
     this.onsetStartAt = null;
     this.onsetFired = false;
     this.source = this.context!.createMediaStreamSource(this.stream);
@@ -241,6 +252,47 @@ export class VoiceRecorder {
     }
   }
 
+  /**
+   * Feed the frame through the speech test in fixed-size blocks.
+   *
+   * The two capture paths hand over very different frame sizes (128 from the
+   * worklet, 4096 from the ScriptProcessor fallback), and the measure this
+   * relies on is frequency content — average a fricative across 256 ms and it
+   * stops looking like one. Leftovers carry to the next frame rather than
+   * being padded, so no block is analysed half-empty.
+   */
+  private analyse(frame: Float32Array): void {
+    let source = frame;
+    if (this.pendingBlock && this.pendingBlock.length) {
+      const merged = new Float32Array(this.pendingBlock.length + frame.length);
+      merged.set(this.pendingBlock, 0);
+      merged.set(frame, this.pendingBlock.length);
+      source = merged;
+    }
+
+    let offset = 0;
+    while (offset + BLOCK_SIZE <= source.length) {
+      const { inBand, consonant } = classifyBlock(source.subarray(offset, offset + BLOCK_SIZE));
+      // Advance the totals by the hop, not the block: windows overlap, and
+      // counting the block would report twice the audio that actually played.
+      if (inBand) this.inBandSamples += HOP_SIZE;
+      if (consonant) this.consonantSamples += HOP_SIZE;
+      offset += HOP_SIZE;
+    }
+    this.pendingBlock = offset < source.length ? source.slice(offset) : null;
+  }
+
+  /** Both kinds of evidence, together. Rumble supplies the first on its own
+   *  all day; only speech supplies the second. */
+  private hasSpeech(): boolean {
+    const rate = this.context?.sampleRate ?? SAMPLE_RATE;
+    const msOf = (samples: number) => (samples / rate) * 1000;
+    return (
+      msOf(this.inBandSamples) >= SPEECH_EVIDENCE.minInBandMs &&
+      msOf(this.consonantSamples) >= SPEECH_EVIDENCE.minConsonantMs
+    );
+  }
+
   private collect(frame: Float32Array): void {
     if (this.stopping) return;
     this.chunks.push(frame);
@@ -251,23 +303,24 @@ export class VoiceRecorder {
     this.onLevel?.(peak);
 
     if (this.endpointing) {
+      this.analyse(frame);
+
       const now = Date.now();
-      if (peak >= this.endpointing.speechThreshold) {
-        if (this.speechOnsetAt === null) this.speechOnsetAt = now;
-        if (!this.hasSpeech && now - this.speechOnsetAt >= this.endpointing.speechSustainMs) {
-          this.hasSpeech = true;
-        }
-        // The silence clock resets on every loud frame, sustained or not —
-        // still talking is still talking even before speechSustainMs has
-        // fully elapsed.
-        this.lastVoiceAt = now;
-      } else {
-        this.speechOnsetAt = null;
-        if (this.hasSpeech && now - this.lastVoiceAt >= this.endpointing.silenceMs) {
-          this.stopping = true;
-          this.onAutoStop?.();
-          return;
-        }
+      if (peak >= this.endpointing.quietLevel) this.lastLoudAt = now;
+
+      const heardSpeech = this.hasSpeech();
+      if (heardSpeech && now - this.lastLoudAt >= this.endpointing.silenceMs) {
+        // Said their piece and stopped.
+        this.stopping = true;
+        this.onAutoStop?.();
+        return;
+      }
+      if (!heardSpeech && now - this.startedAt >= this.endpointing.noSpeechTimeoutMs) {
+        // Nobody spoke. End the turn now rather than holding the microphone
+        // open to MAX_SECONDS; stop() will reject it as silence either way.
+        this.stopping = true;
+        this.onAutoStop?.();
+        return;
       }
     }
 
@@ -299,19 +352,16 @@ export class VoiceRecorder {
     const chunks = this.chunks;
     const frames = this.frames;
     const requireSpeech = !!this.endpointing;
-    const hadSpeech = this.hasSpeech;
+    const hadSpeech = this.hasSpeech();
     this.release();
 
     if (frames / rate < MIN_SECONDS) throw new NothingRecordedError("too short");
-    // Endpointing's own read is the authority when it's configured — it
-    // watched the whole recording for level held above a real speech
-    // threshold, where the peak check below only asks "was any single
-    // sample above 0.005 anywhere in the buffer", a bar cabin noise, road
-    // vibration, or a single bump clears without anyone having said a word.
-    // That gap is why an empty conversation turn could end up transcribed
-    // instead of discarded — including the worst case, MAX_SECONDS elapsing
-    // on nothing but engine noise and 30 seconds of it going to the
-    // transcriber. This is the fix: no detected speech, no transcription.
+    // The speech test is the authority whenever endpointing is configured. The
+    // peak check further down only asks "was any single sample above 0.005
+    // anywhere in the buffer" — a bar that road noise, a door, or one thump on
+    // the seat clears without a word being said, which is exactly how a
+    // recording of banging became a spoken command. No speech evidence, no
+    // transcription.
     if (requireSpeech && !hadSpeech) throw new NothingRecordedError("silence");
 
     const merged = new Float32Array(frames);
