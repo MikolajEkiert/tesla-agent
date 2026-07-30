@@ -233,6 +233,62 @@ def totp_secret() -> str | None:
     return os.getenv("AMP_TOTP_SECRET") or None
 
 
+# --- shortcut token (Siri / Apple Shortcuts) --------------------------------
+# A Shortcut cannot do WebAuthn and does not keep a cookie jar between runs, so
+# hands-free voice needs a bearer credential. That is a second way in, and it is
+# scoped as narrowly as the feature allows:
+#
+#   * exactly one route accepts it (see TOKEN_ROUTES in main.py) — asking a
+#     question. It cannot reach /actions/confirm, so the physically
+#     consequential commands still require a tap in the app, on a real session.
+#   * absent by default. Without AMP_SHORTCUT_TOKEN nothing changes and no
+#     token is accepted at all.
+#   * revoked by editing one env var and restarting.
+
+SHORTCUT_TOKEN_MIN_LENGTH = 32
+
+_warned_short_token = False
+
+
+def shortcut_token() -> str | None:
+    """None when the feature is off — including when a token is set but too
+    weak to be worth accepting.
+
+    A short token is refused rather than used: this credential is typed once
+    into a Shortcut and then never seen again, so there is no reason for it to
+    be memorable, and every reason for it to be long. Refusing loudly beats
+    quietly guarding the car with eight characters.
+    """
+    global _warned_short_token
+    value = os.getenv("AMP_SHORTCUT_TOKEN", "").strip()
+    if not value:
+        return None
+    if len(value) < SHORTCUT_TOKEN_MIN_LENGTH:
+        if not _warned_short_token:
+            _warned_short_token = True
+            print(
+                f"[gate] AMP_SHORTCUT_TOKEN is shorter than "
+                f"{SHORTCUT_TOKEN_MIN_LENGTH} characters and is being ignored. "
+                f"Generate one with: openssl rand -hex 32",
+                flush=True,
+            )
+        return None
+    return value
+
+
+def shortcut_token_valid(authorization: str | None) -> bool:
+    expected = shortcut_token()
+    if not expected or not authorization:
+        return False
+    scheme, _, presented = authorization.partition(" ")
+    if scheme.lower() != "bearer":
+        return False
+    presented = presented.strip()
+    if not presented:
+        return False
+    return hmac.compare_digest(presented, expected)
+
+
 def totp_required() -> bool:
     return totp_secret() is not None
 

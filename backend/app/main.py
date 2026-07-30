@@ -73,6 +73,16 @@ PUBLIC_PREFIXES = (
     "/.well-known/",
 )
 
+# Routes that additionally accept the Shortcut bearer token (see
+# gate.shortcut_token). Exactly one, and deliberately not /actions/confirm:
+# Siri can ask questions and start reversible things, but opening the car still
+# needs a tap in the app on a real session. Keeping the list here — next to
+# PUBLIC_ROUTES rather than as a decorator on the endpoint — means the whole
+# access model is readable in one place.
+TOKEN_ROUTES = {
+    ("POST", "/voice/ask"),
+}
+
 
 @app.middleware("http")
 async def require_session(request: Request, call_next):
@@ -93,9 +103,26 @@ async def require_session(request: Request, call_next):
         # Fail closed. An unconfigured gate must never mean "let everyone in".
         return JSONResponse({"detail": str(e)}, status_code=503)
 
-    if not gate.session_is_valid(request.cookies.get(gate.COOKIE_NAME), secret):
-        return JSONResponse({"detail": "Not unlocked"}, status_code=401)
-    return await call_next(request)
+    if gate.session_is_valid(request.cookies.get(gate.COOKIE_NAME), secret):
+        return await call_next(request)
+
+    # Checked only after the session, so a browser always authenticates the
+    # strong way and the token is a fallback for clients that cannot hold a
+    # cookie. A wrong token counts against the same lockout as a wrong
+    # passcode — otherwise it would be the one unrate-limited guessing oracle
+    # on the server.
+    if (request.method, path) in TOKEN_ROUTES:
+        client = gate.client_key(
+            request.client.host if request.client else None,
+            request.headers.get("x-forwarded-for"),
+        )
+        if gate.is_locked_out(client):
+            return JSONResponse({"detail": "Too many attempts."}, status_code=429)
+        if gate.shortcut_token_valid(request.headers.get("authorization")):
+            return await call_next(request)
+        gate.record_failure(client)
+
+    return JSONResponse({"detail": "Not unlocked"}, status_code=401)
 
 
 # Added last so it ends up OUTERMOST: Starlette applies middleware in reverse
@@ -351,6 +378,37 @@ async def voice_transcribe(request: Request, language: str | None = None) -> dic
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
     return {"text": text}
+
+
+class VoiceAskRequest(BaseModel):
+    text: str
+    language: str | None = None
+
+
+# Long enough for any spoken sentence; short enough that a token holder cannot
+# post an essay and bill the LLM quota for it.
+MAX_ASK_CHARS = 1000
+
+
+@app.post("/voice/ask")
+async def voice_ask(req: VoiceAskRequest) -> dict[str, str]:
+    """One question, one spoken answer — the endpoint an Apple Shortcut calls.
+
+    Single-turn by design: a Shortcut has nowhere to keep a transcript, and a
+    caller-supplied history would be an invitation to forge one. It returns the
+    reply text alone, with no tool_trace and therefore no confirmation token,
+    so a command that needs confirming ends as "confirm it in the app" and
+    stops there. This is the only route the bearer token can reach; see
+    TOKEN_ROUTES above.
+    """
+    text = req.text.strip()[:MAX_ASK_CHARS]
+    if not text:
+        raise HTTPException(status_code=400, detail="Nothing to ask")
+    try:
+        result = await orchestrator.chat(text, None, req.language)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"reply": result.get("reply", "")}
 
 
 class ConfirmRequest(BaseModel):
