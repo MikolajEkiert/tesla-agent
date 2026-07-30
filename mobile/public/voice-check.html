@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>Amp — diagnostyka głosu</title>
+    <!--
+      Throwaway probe, deliberately standalone: no bundler, no imports, no
+      session. It answers questions about *this browser* that no amount of
+      reading documentation settles, because the thing that matters is an
+      installed iOS PWA in standalone mode, which behaves differently from
+      the same page in a Safari tab.
+
+      Open it from the installed app (not Safari) at /voice-check.html.
+      It duplicates ~30 lines of WAV encoding from src/voice/recorder.ts on
+      purpose — a diagnostic that shares code with the thing it diagnoses
+      can't tell you the thing is broken.
+    -->
+    <style>
+      :root {
+        --bg: #0c0e12;
+        --surface: #151920;
+        --line: #232a35;
+        --text: #e8ecf2;
+        --dim: #8b95a5;
+        --ok: #4ec9a0;
+        --bad: #e2564f;
+        --warn: #e0a850;
+      }
+      * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.5 -apple-system, system-ui, sans-serif;
+      }
+      h1 { font-size: 19px; margin: 0 0 4px; }
+      .sub { color: var(--dim); font-size: 13px; margin-bottom: 20px; }
+      .row {
+        display: flex;
+        gap: 10px;
+        padding: 11px 0;
+        border-bottom: 1px solid var(--line);
+        align-items: baseline;
+      }
+      .row:last-child { border-bottom: 0; }
+      .k { flex: 1; }
+      .v { font-family: ui-monospace, Menlo, monospace; font-size: 12px; text-align: right; max-width: 55%; word-break: break-word; }
+      .ok { color: var(--ok); }
+      .bad { color: var(--bad); }
+      .warn { color: var(--warn); }
+      section {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 4px 14px;
+        margin-bottom: 16px;
+      }
+      h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: var(--dim); margin: 16px 0 4px; }
+      button {
+        width: 100%;
+        padding: 13px;
+        margin: 8px 0;
+        border: 0;
+        border-radius: 10px;
+        background: #3b82f6;
+        color: #fff;
+        font: 600 15px system-ui;
+      }
+      button:disabled { opacity: .45; }
+      button.ghost { background: var(--surface); border: 1px solid var(--line); color: var(--text); }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 11px;
+        color: var(--dim);
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px;
+      }
+      audio { width: 100%; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Diagnostyka głosu</h1>
+    <div class="sub" id="ctx">…</div>
+
+    <h2>1 · Środowisko</h2>
+    <section id="env"></section>
+
+    <h2>2 · Mikrofon</h2>
+    <section id="mic"></section>
+    <button id="rec">Nagraj 4 sekundy i odtwórz</button>
+    <div id="playback"></div>
+
+    <h2>3 · Rozpoznawanie mowy (wbudowane)</h2>
+    <section id="asr"></section>
+    <button id="listen" class="ghost">Powiedz coś po polsku (5 s)</button>
+
+    <h2>4 · Synteza mowy</h2>
+    <section id="tts"></section>
+    <button id="speak" class="ghost">Przeczytaj zdanie po polsku</button>
+    <div class="sub" style="margin-top:4px">
+      Sprawdź to <b>dwa razy</b>: raz z włączonym dźwiękiem, raz z przełącznikiem
+      ciszy (bocznym) w pozycji cichej. Jeśli w trybie cichym nie słychać nic,
+      asystent będzie niemy w aucie, gdy telefon jest wyciszony.
+    </div>
+
+    <h2>Wynik</h2>
+    <pre id="out">…</pre>
+    <button id="copy" class="ghost">Skopiuj wynik</button>
+
+    <script>
+      const results = {};
+
+      function add(sectionId, key, value, verdict) {
+        results[key] = value;
+        const row = document.createElement("div");
+        row.className = "row";
+        row.innerHTML =
+          '<span class="k"></span><span class="v ' + (verdict || "") + '"></span>';
+        row.children[0].textContent = key;
+        row.children[1].textContent = value;
+        document.getElementById(sectionId).appendChild(row);
+        render();
+      }
+
+      function render() {
+        document.getElementById("out").textContent = JSON.stringify(results, null, 1);
+      }
+
+      // --- 1. environment ----------------------------------------------------
+      // `standalone` is the whole reason this page exists: several media APIs
+      // behave differently once the page runs from the home screen instead of
+      // a Safari tab, and that is the mode the app actually ships in.
+      const standalone =
+        window.navigator.standalone === true ||
+        window.matchMedia("(display-mode: standalone)").matches;
+
+      document.getElementById("ctx").textContent = standalone
+        ? "Tryb: zainstalowana PWA ✓ (to jest właściwy kontekst)"
+        : "Tryb: karta przeglądarki — otwórz tę stronę z ikony na ekranie głównym!";
+
+      add("env", "standalone", String(standalone), standalone ? "ok" : "bad");
+      add("env", "secureContext", String(window.isSecureContext),
+          window.isSecureContext ? "ok" : "bad");
+      add("env", "userAgent", navigator.userAgent.slice(0, 90));
+
+      // --- 2. microphone -----------------------------------------------------
+      const hasGUM = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+      add("mic", "getUserMedia", String(hasGUM), hasGUM ? "ok" : "bad");
+
+      const AC = window.AudioContext || window.webkitAudioContext;
+      add("mic", "AudioContext", String(!!AC), AC ? "ok" : "bad");
+      add("mic", "AudioWorklet",
+          String(!!(AC && AC.prototype && AC.prototype.audioWorklet !== undefined) ||
+                 !!(AC && new AC().audioWorklet)));
+
+      // Which container iOS would hand us if we used MediaRecorder instead of
+      // encoding WAV ourselves. Recorded for the write-up; the app does not
+      // depend on the answer.
+      if (window.MediaRecorder) {
+        const types = ["audio/wav", "audio/webm", "audio/webm;codecs=opus", "audio/mp4", "audio/aac"];
+        const supported = types.filter((t) => MediaRecorder.isTypeSupported(t));
+        add("mic", "MediaRecorder", supported.join(", ") || "brak", supported.length ? "" : "warn");
+      } else {
+        add("mic", "MediaRecorder", "brak", "warn");
+      }
+
+      // Minimal WAV writer — 16-bit PCM mono, the one format we can be certain
+      // both iOS produces correctly and the transcriber accepts.
+      function encodeWav(samples, sampleRate) {
+        const buffer = new ArrayBuffer(44 + samples.length * 2);
+        const view = new DataView(buffer);
+        const str = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+        str(0, "RIFF");
+        view.setUint32(4, 36 + samples.length * 2, true);
+        str(8, "WAVEfmt ");
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, 1, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        str(36, "data");
+        view.setUint32(40, samples.length * 2, true);
+        for (let i = 0; i < samples.length; i++) {
+          const s = Math.max(-1, Math.min(1, samples[i]));
+          view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+        }
+        return new Blob([buffer], { type: "audio/wav" });
+      }
+
+      document.getElementById("rec").onclick = async function () {
+        const btn = this;
+        btn.disabled = true;
+        btn.textContent = "Proszę o dostęp…";
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+          });
+          add("mic", "permission", "granted", "ok");
+
+          // Ask for 16 kHz directly. Safari has historically ignored this and
+          // given the hardware rate instead, which is exactly why the app
+          // resamples rather than trusting it.
+          let ctx;
+          try { ctx = new AC({ sampleRate: 16000 }); } catch (e) { ctx = new AC(); }
+          add("mic", "requestedRate", "16000");
+          add("mic", "actualRate", String(ctx.sampleRate),
+              ctx.sampleRate === 16000 ? "ok" : "warn");
+
+          const source = ctx.createMediaStreamSource(stream);
+          const node = ctx.createScriptProcessor(4096, 1, 1);
+          const chunks = [];
+          let total = 0;
+          node.onaudioprocess = (e) => {
+            const c = new Float32Array(e.inputBuffer.getChannelData(0));
+            chunks.push(c);
+            total += c.length;
+          };
+          source.connect(node);
+          node.connect(ctx.destination);
+
+          btn.textContent = "Mów teraz… 4";
+          for (let i = 3; i >= 1; i--) {
+            await new Promise((r) => setTimeout(r, 1000));
+            btn.textContent = "Mów teraz… " + i;
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+
+          node.disconnect();
+          source.disconnect();
+          stream.getTracks().forEach((t) => t.stop());
+
+          const flat = new Float32Array(total);
+          let off = 0;
+          for (const c of chunks) { flat.set(c, off); off += c.length; }
+
+          // Silence would also produce a perfectly valid WAV, so measure the
+          // signal: a granted permission that captures nothing is a real and
+          // reported iOS failure mode.
+          let peak = 0;
+          for (let i = 0; i < flat.length; i++) peak = Math.max(peak, Math.abs(flat[i]));
+          add("mic", "samples", String(total), total > 0 ? "ok" : "bad");
+          add("mic", "peakLevel", peak.toFixed(3),
+              peak > 0.01 ? "ok" : "bad");
+
+          const blob = encodeWav(flat, ctx.sampleRate);
+          add("mic", "wavBytes", String(blob.size));
+          const audio = document.createElement("audio");
+          audio.controls = true;
+          audio.src = URL.createObjectURL(blob);
+          document.getElementById("playback").innerHTML = "";
+          document.getElementById("playback").appendChild(audio);
+          btn.textContent = "Nagraj ponownie";
+        } catch (e) {
+          add("mic", "error", String(e && e.name ? e.name + ": " + e.message : e), "bad");
+          btn.textContent = "Nie udało się — spróbuj ponownie";
+        }
+        btn.disabled = false;
+      };
+
+      // --- 3. speech recognition --------------------------------------------
+      // If this works in standalone mode, transcription is free and on-device.
+      // If it does not, audio has to travel to the backend instead.
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      add("asr", "SpeechRecognition", String(!!SR), SR ? "ok" : "warn");
+
+      document.getElementById("listen").onclick = function () {
+        const btn = this;
+        if (!SR) { add("asr", "result", "API niedostępne", "bad"); return; }
+        btn.disabled = true;
+        btn.textContent = "Słucham…";
+        let got = false;
+        try {
+          const r = new SR();
+          r.lang = "pl-PL";
+          r.interimResults = false;
+          r.maxAlternatives = 1;
+          r.onresult = (e) => {
+            got = true;
+            add("asr", "transcript", e.results[0][0].transcript, "ok");
+          };
+          r.onerror = (e) => add("asr", "error", String(e.error), "bad");
+          r.onend = () => {
+            if (!got) add("asr", "result", "cisza / brak wyniku", "warn");
+            btn.disabled = false;
+            btn.textContent = "Spróbuj ponownie";
+          };
+          r.start();
+          setTimeout(() => { try { r.stop(); } catch (e) {} }, 5000);
+        } catch (e) {
+          add("asr", "error", String(e), "bad");
+          btn.disabled = false;
+        }
+      };
+
+      // --- 4. speech synthesis ----------------------------------------------
+      const synth = window.speechSynthesis;
+      add("tts", "speechSynthesis", String(!!synth), synth ? "ok" : "bad");
+
+      function listVoices() {
+        if (!synth) return;
+        const all = synth.getVoices();
+        const pl = all.filter((v) => v.lang && v.lang.toLowerCase().startsWith("pl"));
+        add("tts", "voicesTotal", String(all.length));
+        add("tts", "voicesPolish",
+            pl.map((v) => v.name + " (" + v.lang + ")").join(", ") || "brak",
+            pl.length ? "ok" : "bad");
+      }
+      // Safari populates the voice list asynchronously; asking too early
+      // returns an empty array and looks like "no Polish voice".
+      if (synth) {
+        if (synth.getVoices().length) listVoices();
+        else synth.addEventListener("voiceschanged", listVoices, { once: true });
+      }
+
+      document.getElementById("speak").onclick = function () {
+        if (!synth) return;
+        const u = new SpeechSynthesisUtterance(
+          "Auto ma sześćdziesiąt trzy procent baterii i jest zamknięte."
+        );
+        u.lang = "pl-PL";
+        const pl = synth.getVoices().find((v) => v.lang && v.lang.toLowerCase().startsWith("pl"));
+        if (pl) u.voice = pl;
+        u.onstart = () => add("tts", "spoke", "start", "ok");
+        u.onerror = (e) => add("tts", "speakError", String(e.error), "bad");
+        synth.speak(u);
+      };
+
+      document.getElementById("copy").onclick = async function () {
+        const text = JSON.stringify(results, null, 1);
+        try {
+          await navigator.clipboard.writeText(text);
+          this.textContent = "Skopiowano ✓";
+        } catch (e) {
+          this.textContent = "Zaznacz tekst wyżej ręcznie";
+        }
+      };
+
+      render();
+    </script>
+  </body>
+</html>
