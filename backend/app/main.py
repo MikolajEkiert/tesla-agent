@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 
-from app import actions, confirm_phrase, scheduler, tts, voice
+from app import actions, confirm_phrase, live, scheduler, tts, voice
 from app.auth import gate, passkey
 from app.config import get_settings
 from app.llm import build_orchestrator
@@ -414,6 +414,30 @@ async def voice_speak(req: VoiceSpeakRequest) -> Response:
         # keep it briefly saves a quota slot on the free tier.
         headers={"cache-control": "private, max-age=300"},
     )
+
+
+class LiveTokenRequest(BaseModel):
+    voice: str | None = None
+
+
+@app.post("/voice/live-token")
+async def live_token(req: LiveTokenRequest) -> dict[str, Any]:
+    """A one-use credential letting the phone hold its own audio session.
+
+    Behind the session gate and deliberately not in TOKEN_ROUTES, for the same
+    reason /voice/speak isn't: a token holder standing next to a locked phone
+    should not be able to open a metered stream on the owner's project.
+
+    The credential is bound to one model and one configuration server-side, so
+    what reaches the browser cannot be turned into anything else — and the
+    session it opens has no tools, so it can talk but not act.
+    """
+    try:
+        return await live.mint_token(tts.resolve_voice(req.voice))
+    except live.LiveUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @app.get("/voice/voices")
