@@ -104,12 +104,15 @@ export function Sidebar({
   actions,
   onCancelAction,
   onOpenSettings,
+  onLock,
 }: {
   open: boolean;
   onClose: () => void;
   actions: ScheduledAction[];
   onCancelAction: (id: string) => void;
   onOpenSettings: () => void;
+  /** Ends the session on this device — the lever for a lost or lent phone. */
+  onLock?: () => void;
 }) {
   const { t } = useLanguage();
   const insets = useSafeAreaInsets();
@@ -171,6 +174,13 @@ export function Sidebar({
           <Text style={styles.settingsGlyph}>⚙</Text>
           <Text style={styles.settingsLabel}>{t("settingsTitle")}</Text>
         </Pressable>
+
+        {onLock && (
+          <Pressable onPress={onLock} style={styles.lockRow}>
+            <Text style={styles.settingsGlyph}>⏻</Text>
+            <Text style={styles.settingsLabel}>{t("lockApp")}</Text>
+          </Pressable>
+        )}
       </Animated.View>
     </View>
   );
@@ -266,6 +276,12 @@ const styles = StyleSheet.create({
     paddingTop: space.md,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: color.hairline,
+  },
+  lockRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    paddingTop: space.md,
   },
   settingsGlyph: {
     fontSize: 15,

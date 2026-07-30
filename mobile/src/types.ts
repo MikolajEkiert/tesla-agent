@@ -4,12 +4,17 @@ export interface ToolCall {
   tool: string;
   input: Record<string, unknown>;
   ok: boolean;
+  /** Present when the backend parked a sensitive command awaiting confirmation. */
+  result?: Record<string, unknown>;
 }
 
 /** One turn in the conversation, or an inline instrument-log entry. */
 export type ChatItem =
   | { kind: "message"; id: string; role: Role; text: string }
-  | { kind: "tool"; id: string; call: ToolCall };
+  | { kind: "tool"; id: string; call: ToolCall }
+  // A physically consequential command the assistant proposed; only a tap on
+  // this row executes it (see components/ConfirmCard.tsx).
+  | { kind: "confirm"; id: string; token: string; tool: string };
 
 export interface VehicleState {
   awake?: boolean;

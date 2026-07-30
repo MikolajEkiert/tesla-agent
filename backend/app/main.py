@@ -8,12 +8,13 @@ from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 
-from app import scheduler
+from app import actions, scheduler
+from app.auth import gate, passkey
 from app.config import get_settings
 from app.llm import build_orchestrator
 from app.tesla.adapter import build_adapter
@@ -48,12 +49,241 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="tesla-agent", lifespan=lifespan)
 
+# Paths reachable without a session. Deliberately a tiny allowlist rather than
+# a blocklist: a new endpoint added later is protected by default, which is the
+# failure direction we want when every other route can move a real car.
+# (method, path) rather than path alone. The passkey routes include a greedy
+# DELETE /gate/passkey/{credential_id:path}, so a path-only allowlist let an
+# unauthenticated DELETE /gate/passkey/login/begin reach the delete handler —
+# measured as a 404 rather than a 401. Harmless today, because no real
+# credential id can equal "login/begin", but it is one added public path away
+# from being a real hole.
+PUBLIC_ROUTES = {
+    ("GET", "/health"),
+    ("GET", "/gate/status"),
+    ("POST", "/gate/unlock"),
+    # Logging in with a passkey has to work *before* a session exists. Only
+    # the login pair is public — enrolling a new passkey stays behind the
+    # gate, so a stranger cannot add their own key to the car.
+    ("POST", "/gate/passkey/login/begin"),
+    ("POST", "/gate/passkey/login/finish"),
+}
+PUBLIC_PREFIXES = (
+    # Tesla itself fetches the virtual-key public key from here.
+    "/.well-known/",
+)
+
+
+@app.middleware("http")
+async def require_session(request: Request, call_next):
+    path = request.url.path
+    if (
+        (request.method, path) in PUBLIC_ROUTES
+        or path.startswith(PUBLIC_PREFIXES)
+        # CORS preflight carries no cookies. It is answered by CORSMiddleware
+        # (registered outside this one) and no route declares OPTIONS, so a
+        # non-preflight OPTIONS gets a 405 rather than reaching anything.
+        or request.method == "OPTIONS"
+    ):
+        return await call_next(request)
+
+    try:
+        secret = gate.session_secret()
+    except gate.NotConfigured as e:
+        # Fail closed. An unconfigured gate must never mean "let everyone in".
+        return JSONResponse({"detail": str(e)}, status_code=503)
+
+    if not gate.session_is_valid(request.cookies.get(gate.COOKIE_NAME), secret):
+        return JSONResponse({"detail": "Not unlocked"}, status_code=401)
+    return await call_next(request)
+
+
+# Added last so it ends up OUTERMOST: Starlette applies middleware in reverse
+# registration order, and the session gate above returns 401 by itself. If CORS
+# sat inside the gate, that 401 would go out without CORS headers and a browser
+# would report an opaque network failure instead of "locked" — which is exactly
+# the difference between showing the passcode screen and showing an error.
+#
+# The session lives in a cookie, and browsers refuse to send credentials to a
+# wildcard origin, so "*" disables credentialed CORS. In production the app and
+# API share a domain via Caddy, making this moot; it matters for local dev
+# (set CORS_ORIGINS=http://localhost:8090).
+_wildcard = settings.cors_origins == ["*"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    allow_credentials=not _wildcard,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class UnlockRequest(BaseModel):
+    passcode: str
+    totp: str | None = None
+
+
+@app.get("/gate/status")
+async def gate_status() -> dict[str, Any]:
+    """Lets the app show the right screen, and whether to offer Face ID,
+    before asking for anything."""
+    return {**gate.gate_status(), "passkey_available": await passkey.has_passkeys()}
+
+
+@app.post("/gate/unlock")
+async def gate_unlock(req: UnlockRequest, request: Request, response: Response) -> dict[str, Any]:
+    client = gate.client_key(
+        request.client.host if request.client else None,
+        request.headers.get("x-forwarded-for"),
+    )
+    if gate.is_locked_out(client):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many attempts. Wait 15 minutes and try again.",
+        )
+    try:
+        stored, secret = gate.passcode_hash(), gate.session_secret()
+    except gate.NotConfigured as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    ok = gate.verify_passcode(req.passcode, stored)
+    totp = gate.totp_secret()
+    if ok and totp:
+        ok = gate.verify_totp(req.totp or "", totp)
+    if not ok:
+        gate.record_failure(client)
+        # One message for a wrong passcode and a wrong code alike — saying
+        # which was wrong would tell an attacker they had the passcode right.
+        raise HTTPException(status_code=401, detail="Incorrect passcode")
+
+    gate.clear_failures(client)
+    response.set_cookie(
+        gate.COOKIE_NAME,
+        gate.issue_session(secret),
+        max_age=gate.SESSION_MAX_AGE_S,
+        httponly=True,
+        secure=True,
+        samesite="lax",  # still sent when Tesla redirects back to /auth/callback
+        path="/",
+    )
+    return {"ok": True}
+
+
+@app.post("/gate/lock")
+async def gate_lock(response: Response) -> dict[str, bool]:
+    response.delete_cookie(gate.COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
+# --- passkeys ---------------------------------------------------------------
+# Registration sits behind the session gate on purpose: only someone who has
+# already proved they know the passcode may enrol a new device. Login is
+# necessarily public, but proves possession of a private key the server has
+# never seen.
+
+class RegisterBeginRequest(BaseModel):
+    passcode: str
+    totp: str | None = None
+
+
+@app.post("/gate/passkey/register/begin")
+async def passkey_register_begin(
+    req: RegisterBeginRequest, request: Request
+) -> Response:
+    """Enrolling a new passkey re-checks the passcode even though the caller
+    already holds a session.
+
+    A session alone was enough before, which meant one borrowed unlocked phone
+    (or one stolen cookie) could be converted into a permanent credential of
+    the attacker's own — surviving a passcode change, because passkeys do not
+    depend on it. Re-authentication turns a momentary compromise back into a
+    momentary one.
+    """
+    client = gate.client_key(
+        request.client.host if request.client else None,
+        request.headers.get("x-forwarded-for"),
+    )
+    if gate.is_locked_out(client):
+        raise HTTPException(status_code=429, detail="Too many attempts. Wait 15 minutes.")
+    try:
+        stored = gate.passcode_hash()
+    except gate.NotConfigured as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    ok = gate.verify_passcode(req.passcode, stored)
+    totp = gate.totp_secret()
+    if ok and totp:
+        ok = gate.verify_totp(req.totp or "", totp)
+    if not ok:
+        gate.record_failure(client)
+        raise HTTPException(status_code=401, detail="Incorrect passcode")
+    gate.clear_failures(client)
+    return Response(await passkey.registration_options(), media_type="application/json")
+
+
+@app.post("/gate/passkey/register/finish")
+async def passkey_register_finish(body: dict[str, Any]) -> dict[str, bool]:
+    try:
+        await passkey.verify_registration(body.get("credential", {}), body.get("label"))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True}
+
+
+@app.get("/gate/passkey/list")
+async def passkey_list() -> dict[str, Any]:
+    return {"passkeys": await passkey.list_passkeys()}
+
+
+@app.delete("/gate/passkey/{credential_id:path}")
+async def passkey_delete(credential_id: str) -> dict[str, bool]:
+    if not await passkey.delete_passkey(credential_id):
+        raise HTTPException(status_code=404, detail="No such passkey")
+    return {"ok": True}
+
+
+@app.post("/gate/passkey/login/begin")
+async def passkey_login_begin(request: Request) -> Response:
+    client = gate.client_key(
+        request.client.host if request.client else None,
+        request.headers.get("x-forwarded-for"),
+    )
+    if gate.is_locked_out(client):
+        raise HTTPException(status_code=429, detail="Too many attempts. Wait 15 minutes.")
+    return Response(await passkey.authentication_options(), media_type="application/json")
+
+
+@app.post("/gate/passkey/login/finish")
+async def passkey_login_finish(
+    body: dict[str, Any], request: Request, response: Response
+) -> dict[str, bool]:
+    client = gate.client_key(
+        request.client.host if request.client else None,
+        request.headers.get("x-forwarded-for"),
+    )
+    if gate.is_locked_out(client):
+        raise HTTPException(status_code=429, detail="Too many attempts. Wait 15 minutes.")
+    try:
+        secret = gate.session_secret()
+    except gate.NotConfigured as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    try:
+        await passkey.verify_authentication(body.get("credential", {}))
+    except Exception as e:
+        gate.record_failure(client)
+        raise HTTPException(status_code=401, detail=str(e))
+
+    gate.clear_failures(client)
+    response.set_cookie(
+        gate.COOKIE_NAME,
+        gate.issue_session(secret),
+        max_age=gate.SESSION_MAX_AGE_S,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/",
+    )
+    return {"ok": True}
 
 
 class ChatRequest(BaseModel):
@@ -92,6 +322,37 @@ async def chat(req: ChatRequest) -> ChatResponse:
         # which is specific enough to act on without leaking secrets.
         raise HTTPException(status_code=502, detail=str(e))
     return ChatResponse(**result)
+
+
+class ConfirmRequest(BaseModel):
+    token: str
+
+
+@app.get("/actions/pending/{token}")
+async def pending_action(token: str) -> dict[str, Any]:
+    """What the confirmation card should say. Behind the session gate, so only
+    the owner can even see that something is waiting."""
+    entry = actions.peek_pending(token)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Nothing pending for that token")
+    return entry
+
+
+@app.post("/actions/confirm")
+async def confirm_action(req: ConfirmRequest) -> dict[str, Any]:
+    """Executes a command the assistant only proposed.
+
+    This is the sole path to unlock/trunk/HomeLink, and it is reachable only by
+    a request the owner's tap originates — never by the model, which cannot
+    call HTTP endpoints. That is the whole point: a poisoned tool result can
+    make a card appear, but it cannot tap it.
+    """
+    try:
+        return await actions.confirm(adapter, req.token)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.get("/vehicle/state")

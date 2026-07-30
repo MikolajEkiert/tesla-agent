@@ -13,13 +13,19 @@ import {
 } from "@expo-google-fonts/space-grotesk";
 import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Platform, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { disconnectTesla, fetchAuthStatus } from "./src/api";
+import {
+  disconnectTesla,
+  fetchAuthStatus,
+  fetchGateStatus,
+  type GateStatus,
+} from "./src/api";
 import { LanguageProvider, useLanguage } from "./src/LanguageContext";
 import { ChatScreen } from "./src/screens/ChatScreen";
 import { ConnectScreen } from "./src/screens/ConnectScreen";
+import { PasscodeScreen } from "./src/screens/PasscodeScreen";
 import { color } from "./src/theme";
 import type { AuthStatus } from "./src/types";
 
@@ -63,14 +69,38 @@ function AppInner() {
   const notice = useAuthCallbackNotice();
   const { ready: languageReady } = useLanguage();
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [gateStatus, setGateStatus] = useState<GateStatus | null>(null);
+  const [unlocked, setUnlocked] = useState<boolean | null>(null);
+
+  // Probing /auth/status doubles as the session check: it is behind the gate,
+  // so a 401 means "locked" rather than "broken". One request answers both
+  // questions.
+  const probe = useCallback(() => {
+    fetchAuthStatus()
+      .then((status) => {
+        setAuthStatus(status);
+        setUnlocked(true);
+      })
+      .catch(() => {
+        // Any failure to confirm a session — 401, network error, an edge
+        // proxy demanding its own credentials — lands on the passcode
+        // screen. An earlier version fell through to the chat whenever the
+        // cause wasn't a clean 401, which rendered a fully working-looking
+        // chat over a backend that refused every request. The gate screen is
+        // the honest representation of "not confirmed", and unlocking from
+        // there surfaces the real error if the backend is genuinely down.
+        setUnlocked(false);
+      });
+  }, []);
 
   useEffect(() => {
-    fetchAuthStatus()
-      .then(setAuthStatus)
-      // Backend unreachable, or /auth/status not deployed yet — fail open
-      // to the chat screen rather than stranding the user on a blank gate.
-      .catch(() => setAuthStatus({ required: false, connected: false }));
-  }, []);
+    fetchGateStatus()
+      .then(setGateStatus)
+      .catch(() =>
+        setGateStatus({ configured: false, totp_required: false, passkey_available: false })
+      );
+    probe();
+  }, [probe]);
 
   const handleDisconnect = () => {
     disconnectTesla()
@@ -78,7 +108,26 @@ function AppInner() {
       .finally(() => setAuthStatus((prev) => (prev ? { ...prev, connected: false } : prev)));
   };
 
-  if (!fontsLoaded || !authStatus || !languageReady) {
+  if (!fontsLoaded || !languageReady || unlocked === null) {
+    return <View style={{ flex: 1, backgroundColor: color.bg }} />;
+  }
+
+  // Passcode first: linking a Tesla account, or anything else, should not be
+  // reachable by a stranger who merely opened the URL.
+  if (!unlocked) {
+    return (
+      <SafeAreaProvider>
+        <StatusBar style="light" />
+        <PasscodeScreen
+          totpRequired={gateStatus?.totp_required ?? false}
+          passkeyAvailable={gateStatus?.passkey_available}
+          onUnlocked={probe}
+        />
+      </SafeAreaProvider>
+    );
+  }
+
+  if (!authStatus) {
     return <View style={{ flex: 1, backgroundColor: color.bg }} />;
   }
 
@@ -90,7 +139,11 @@ function AppInner() {
       {needsConnection ? (
         <ConnectScreen errorMessage={notice.error} />
       ) : (
-        <ChatScreen justConnected={notice.success} onDisconnect={handleDisconnect} />
+        <ChatScreen
+          justConnected={notice.success}
+          onDisconnect={handleDisconnect}
+          onLocked={() => setUnlocked(false)}
+        />
       )}
     </SafeAreaProvider>
   );

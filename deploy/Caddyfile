@@ -2,6 +2,29 @@
 # which satisfies Tesla's "domain registered with a certificate authority" rule.
 
 tesla-amp.duckdns.org {
+	# Access control lives in the API (backend/app/auth/gate.py), not here.
+	#
+	# This site briefly carried HTTP basic auth as scaffolding, added the
+	# moment we realised anyone with the URL could unlock the car — the
+	# hostname is not a secret, Let's Encrypt publishes it to Certificate
+	# Transparency logs. It was removed once the in-app passcode gate was
+	# verified, because two prompts for one person is friction without
+	# benefit: the gate is enforced by the API itself, so it also holds if
+	# something ever reaches the backend without passing through Caddy
+	# (verified from inside the compose network).
+
+	# Passcode gate (see backend/app/auth/gate.py). Without this entry the
+	# unlock request falls through to the static frontend and comes back as
+	# an nginx 404 — the app looks broken rather than locked.
+	handle /gate/* {
+		reverse_proxy api:8000
+	}
+	# Confirmation of physically consequential commands (unlock, trunk,
+	# HomeLink). The assistant can only propose those; this is the path the
+	# owner's tap travels to actually execute one.
+	handle /actions/* {
+		reverse_proxy api:8000
+	}
 	handle /chat* {
 		reverse_proxy api:8000
 	}
@@ -11,6 +34,8 @@ tesla-amp.duckdns.org {
 	handle /auth/* {
 		reverse_proxy api:8000
 	}
+	# Tesla fetches the virtual-key public key from here itself, so this one
+	# path must stay reachable without credentials (see @protected above).
 	handle /.well-known/* {
 		reverse_proxy api:8000
 	}

@@ -13,10 +13,13 @@ import {
   cancelScheduledAction,
   fetchScheduledActions,
   fetchVehicleState,
+  lock,
+  NotUnlockedError,
   sendMessage,
 } from "../api";
 import { ChatInput } from "../components/ChatInput";
 import { InstrumentStrip } from "../components/InstrumentStrip";
+import { ConfirmCard } from "../components/ConfirmCard";
 import { MessageRow } from "../components/MessageRow";
 import { Sidebar } from "../components/Sidebar";
 import { ToolLogLine } from "../components/ToolLogLine";
@@ -36,9 +39,12 @@ const id = () => String(nextId++);
 export function ChatScreen({
   justConnected,
   onDisconnect,
+  onLocked,
 }: {
   justConnected?: boolean;
   onDisconnect?: () => void;
+  /** Session expired or the user locked the app — hand back to the gate. */
+  onLocked?: () => void;
 }) {
   const { language, t } = useLanguage();
   const [showSettings, setShowSettings] = useState(false);
@@ -61,18 +67,20 @@ export function ChatScreen({
   const refreshVehicle = useCallback(() => {
     fetchVehicleState()
       .then(setVehicle)
-      .catch(() => {
-        /* strip just shows nothing if the backend is unreachable */
+      .catch((e) => {
+        // A lapsed session must send the user back to the passcode screen;
+        // anything else just leaves the strip blank.
+        if (e instanceof NotUnlockedError) onLocked?.();
       });
-  }, []);
+  }, [onLocked]);
 
   const refreshScheduled = useCallback(() => {
     fetchScheduledActions()
       .then(setScheduled)
-      .catch(() => {
-        /* drawer just shows an empty queue if the backend is unreachable */
+      .catch((e) => {
+        if (e instanceof NotUnlockedError) onLocked?.();
       });
-  }, []);
+  }, [onLocked]);
 
   useEffect(() => {
     refreshVehicle();
@@ -123,9 +131,26 @@ export function ChatScreen({
         setHistory(res.history);
         setItems((prev) => [
           ...prev,
-          ...res.tool_trace.map(
-            (call): ChatItem => ({ kind: "tool", id: id(), call })
-          ),
+          ...res.tool_trace.flatMap((call): ChatItem[] => {
+            // A sensitive command comes back parked rather than executed, with
+            // a token the card below trades for execution once tapped.
+            const pending = call.result as
+              | { confirmation_required?: boolean; confirm_token?: string }
+              | undefined;
+            const row: ChatItem = { kind: "tool", id: id(), call };
+            if (pending?.confirmation_required && pending.confirm_token) {
+              return [
+                row,
+                {
+                  kind: "confirm",
+                  id: id(),
+                  token: pending.confirm_token,
+                  tool: call.tool,
+                },
+              ];
+            }
+            return [row];
+          }),
           { kind: "message", id: id(), role: "assistant", text: res.reply },
         ]);
         refreshVehicle();
@@ -136,12 +161,16 @@ export function ChatScreen({
         // BackendError means the backend responded — show its actual reason
         // (e.g. an LLM rate limit). Anything else is a real connectivity
         // failure (fetch never got a response at all).
-        setError(e instanceof BackendError ? e.message : t("errorUnreachable"));
+        if (e instanceof NotUnlockedError) {
+          onLocked?.();
+        } else {
+          setError(e instanceof BackendError ? e.message : t("errorUnreachable"));
+        }
       } finally {
         setPending(false);
       }
     },
-    [history, refreshVehicle, refreshScheduled, language, t]
+    [history, refreshVehicle, refreshScheduled, language, t, onLocked]
   );
 
   useEffect(() => {
@@ -182,6 +211,16 @@ export function ChatScreen({
           renderItem={({ item }) =>
             item.kind === "message" ? (
               <MessageRow role={item.role} text={item.text} />
+            ) : item.kind === "confirm" ? (
+              <ConfirmCard
+                token={item.token}
+                tool={item.tool}
+                onDone={() => {
+                  refreshVehicle();
+                  refreshScheduled();
+                }}
+                onDismiss={() => {}}
+              />
             ) : (
               <ToolLogLine call={item.call} />
             )
@@ -204,6 +243,10 @@ export function ChatScreen({
         onOpenSettings={() => {
           setMenuOpen(false);
           setShowSettings(true);
+        }}
+        onLock={() => {
+          setMenuOpen(false);
+          lock().finally(() => onLocked?.());
         }}
       />
     </SafeAreaView>
