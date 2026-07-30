@@ -109,6 +109,13 @@ const STRINGS = {
     conversationBargeInOff: "Tap only",
     conversationBargeInHint:
       "\"By voice\" keeps the microphone open while the assistant talks, so starting to speak cuts it off — same as Grok or Gemini. It relies on the phone's own echo cancellation, which isn't equally good on every phone and speaker. If replies start cutting themselves off for no reason, switch to \"Tap only\".",
+    voiceConfirmSection: "Confirming by voice",
+    voiceConfirmOn: "Say \"confirm\"",
+    voiceConfirmOff: "Tap only",
+    voiceConfirmHint:
+      "In a conversation, say \"confirm\" to approve what's waiting instead of reaching for the screen. Unlocking the car always needs a tap. Anyone within earshot can say the word too, so turn this off if you often drive with passengers.",
+    voiceConfirmSpoken: "Say \"confirm\" or tap",
+    voiceConfirmMissed: "I didn't catch that — tap to confirm.",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -213,6 +220,13 @@ const STRINGS = {
     conversationBargeInOff: "Tylko dotknięciem",
     conversationBargeInHint:
       "„Głosem” trzyma mikrofon otwarty, gdy asystent mówi, więc zaczęcie mówienia go przerywa — tak jak w Groku czy Gemini. Polega na anulowaniu echa w telefonie, które nie na każdym telefonie i głośniku działa tak samo dobrze. Jeśli odpowiedzi zaczną się urywać bez powodu, przełącz na „Tylko dotknięciem”.",
+    voiceConfirmSection: "Potwierdzanie głosem",
+    voiceConfirmOn: "Powiedz „potwierdzam”",
+    voiceConfirmOff: "Tylko dotknięciem",
+    voiceConfirmHint:
+      "W rozmowie powiedz „potwierdzam”, żeby zatwierdzić to, co czeka, zamiast sięgać po ekran. Otwarcie auta zawsze wymaga dotknięcia. To słowo może wypowiedzieć każdy w zasięgu głosu, więc wyłącz to, jeśli często wozisz pasażerów.",
+    voiceConfirmSpoken: "Powiedz „potwierdzam” albo dotknij",
+    voiceConfirmMissed: "Nie zrozumiałem — dotknij, żeby potwierdzić.",
   },
 } as const;
 

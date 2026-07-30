@@ -70,6 +70,35 @@ export async function saveBargeIn(enabled: boolean): Promise<void> {
   }
 }
 
+const VOICE_CONFIRM_KEY = "amp.voiceconfirm";
+
+/**
+ * Whether a spoken word may settle a confirmation card mid-conversation.
+ *
+ * Defaults on, because reaching for the screen is the thing the owner asked to
+ * stop doing. Off is a real choice though: a car with passengers is a room
+ * where somebody else can say the word, and the backend's own switch
+ * (AMP_VOICE_CONFIRM) can withdraw it without shipping an app build.
+ */
+export async function loadVoiceConfirm(): Promise<boolean> {
+  try {
+    const stored = await AsyncStorage.getItem(VOICE_CONFIRM_KEY);
+    if (stored === "0") return false;
+    if (stored === "1") return true;
+  } catch {
+    // storage unavailable — the default stands
+  }
+  return true;
+}
+
+export async function saveVoiceConfirm(enabled: boolean): Promise<void> {
+  try {
+    await AsyncStorage.setItem(VOICE_CONFIRM_KEY, enabled ? "1" : "0");
+  } catch {
+    // best-effort persistence only
+  }
+}
+
 /** Linear resample. The browser is free to ignore a requested sample rate —
  *  Safari commonly gives 48 kHz whatever you ask for — so the conversion has
  *  to happen here rather than being assumed away. */

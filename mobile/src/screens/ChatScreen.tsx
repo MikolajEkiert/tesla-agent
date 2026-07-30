@@ -17,6 +17,7 @@ import {
   NotUnlockedError,
   sendMessage,
   transcribe,
+  confirmByVoice,
 } from "../api";
 import { ChatInput } from "../components/ChatInput";
 import type { ConversationPhase } from "../components/ConversationBar";
@@ -47,8 +48,10 @@ import {
 } from "../voice/speak";
 import {
   loadBargeIn,
+  loadVoiceConfirm,
   NothingRecordedError,
   saveBargeIn,
+  saveVoiceConfirm,
   VoiceRecorder,
   voiceInputSupported,
 } from "../voice/recorder";
@@ -152,6 +155,12 @@ export function ChatScreen({
   const bargeInWatcherRef = useRef<VoiceRecorder | null>(null);
   // Consecutive turns where nothing was said. Reset by any real transcript.
   const emptyTurnsRef = useRef(0);
+  const [voiceConfirmEnabled, setVoiceConfirmEnabled] = useState(true);
+  // The one card a spoken word may settle right now. Set when a gated command
+  // comes back parked during a conversation; cleared the moment it is settled,
+  // refused, or superseded — so the word can never apply to a card the driver
+  // has stopped thinking about.
+  const awaitingVoiceConfirmRef = useRef<{ token: string; tool: string } | null>(null);
   // Indirection so handleSend's useCallback deps don't have to include
   // functions that are themselves redefined every render (and that in turn
   // call handleSend) — that pair would otherwise be circular.
@@ -189,6 +198,7 @@ export function ChatScreen({
       setActiveVoice(choice);
     });
     loadBargeIn().then(setBargeInEnabled);
+    loadVoiceConfirm().then(setVoiceConfirmEnabled);
     // Leaving the screen mid-sentence should not leave a voice talking to an
     // empty room — the synthesiser outlives the component otherwise. Same
     // reasoning for a conversation's open microphone, capturing or watching.
@@ -229,6 +239,12 @@ export function ChatScreen({
     setVoiceChoice(choice);
     setActiveVoice(choice);
     saveVoiceChoice(choice);
+  }, []);
+
+  const changeVoiceConfirm = useCallback((enabled: boolean) => {
+    setVoiceConfirmEnabled(enabled);
+    saveVoiceConfirm(enabled);
+    if (!enabled) awaitingVoiceConfirmRef.current = null;
   }, []);
 
   const changeBargeIn = useCallback((enabled: boolean) => {
@@ -315,6 +331,13 @@ export function ChatScreen({
                   token: pending.confirm_token,
                   tool: call.tool,
                   args: call.input,
+                  // Only during a conversation, and never for unlock — the
+                  // server refuses that anyway, so offering it in the UI would
+                  // just be a promise it won't keep.
+                  voice:
+                    conversationTurn &&
+                    voiceConfirmEnabled &&
+                    call.tool !== "unlock",
                 },
               ];
             }
@@ -322,6 +345,22 @@ export function ChatScreen({
           }),
           { kind: "message", id: id(), role: "assistant", text: res.reply },
         ]);
+        // Arm the spoken confirmation for the newest parked command, if this
+        // turn produced one. Last wins: if the assistant somehow proposed two,
+        // the word is ambiguous and the server refuses it anyway.
+        if (conversationTurn && voiceConfirmEnabled) {
+          const parked = res.tool_trace
+            .filter((call) => {
+              const p = call.result as { confirm_token?: string } | undefined;
+              return p?.confirm_token && call.tool !== "unlock";
+            })
+            .pop();
+          const token = (parked?.result as { confirm_token?: string } | undefined)
+            ?.confirm_token;
+          awaitingVoiceConfirmRef.current =
+            token && parked ? { token, tool: parked.tool } : null;
+        }
+
         // Only the final reply is spoken — never the tool trace, and never a
         // pending confirmation as if it were the outcome. The model is already
         // told to say that something is waiting in the app (see
@@ -395,6 +434,8 @@ export function ChatScreen({
         onVoiceChange={changeVoice}
         bargeInEnabled={bargeInEnabled}
         onBargeInChange={changeBargeIn}
+        voiceConfirmEnabled={voiceConfirmEnabled}
+        onVoiceConfirmChange={changeVoiceConfirm}
       />
     );
   }
@@ -444,6 +485,9 @@ export function ChatScreen({
   const stopConversation = () => {
     conversationActiveRef.current = false;
     setConversationActive(false);
+    // Leaving the conversation retires the spoken shortcut; the card itself
+    // stays on screen and stays tappable.
+    awaitingVoiceConfirmRef.current = null;
     stopBargeInWatcher();
     conversationRecorderRef.current?.cancel();
     conversationRecorderRef.current = null;
@@ -487,6 +531,85 @@ export function ChatScreen({
     listenAgain();
   };
 
+  /**
+   * Offer this recording to the waiting card.
+   *
+   * Returns true when the turn is finished here — executed, cancelled, or
+   * refused with something said about it — and false when the audio turned out
+   * not to be an answer and should travel the ordinary path instead.
+   *
+   * The one case that deliberately does *not* fall through is a mis-hearing:
+   * having asked to open the trunk, "no_match" almost always means the driver
+   * said the word and it came back wrong, so sending that audio on to the
+   * assistant as a fresh instruction would be the wrong guess to make.
+   */
+  const settleByVoice = async (
+    awaiting: { token: string; tool: string },
+    blob: Blob
+  ): Promise<boolean> => {
+    let outcome: string | undefined;
+    try {
+      const result = await confirmByVoice(blob, awaiting.token, language);
+      if (result.ok) {
+        awaitingVoiceConfirmRef.current = null;
+        emptyTurnsRef.current = 0;
+        setItems((prev) => [
+          ...prev,
+          { kind: "message", id: id(), role: "assistant", text: t("confirmExecuted") },
+        ]);
+        refreshVehicle();
+        refreshScheduled();
+        speakThen(t("confirmExecuted"));
+        return true;
+      }
+      outcome = result.outcome;
+    } catch {
+      // The card stays on screen and stays tappable, which is the fallback
+      // this whole feature is layered on top of.
+      awaitingVoiceConfirmRef.current = null;
+      listenAgain();
+      return true;
+    }
+
+    if (outcome === "cancelled") {
+      awaitingVoiceConfirmRef.current = null;
+      setItems((prev) => [
+        ...prev,
+        { kind: "message", id: id(), role: "assistant", text: t("confirmDismissed") },
+      ]);
+      speakThen(t("confirmDismissed"));
+      return true;
+    }
+    if (outcome === "no_speech") {
+      // Nothing was said. Keep the card armed and keep listening — this costs
+      // no attempt server-side either.
+      listenAgain();
+      return true;
+    }
+    // Heard, but not the word. One nudge, then the card is tap-only.
+    awaitingVoiceConfirmRef.current = null;
+    setItems((prev) => [
+      ...prev,
+      { kind: "message", id: id(), role: "assistant", text: t("voiceConfirmMissed") },
+    ]);
+    speakThen(t("voiceConfirmMissed"));
+    return true;
+  };
+
+  /** Speak a line the assistant produced locally, then carry on listening. */
+  const speakThen = (line: string) => {
+    setSpeaking(true);
+    setConversationPhase("speaking");
+    startBargeInWatcherRef.current();
+    speak(line, language, {
+      onEnd: () => {
+        setSpeaking(false);
+        stopBargeInWatcherRef.current();
+        listenAgainRef.current();
+      },
+    });
+  };
+
   const finishConversationTurn = async () => {
     const recorder = conversationRecorderRef.current;
     if (!recorder) return;
@@ -494,6 +617,18 @@ export function ChatScreen({
     setConversationPhase("thinking");
     try {
       const blob = await recorder.stop();
+
+      // A card is waiting: this turn is an answer to it, not a new request.
+      // The audio goes to the confirmation route and never to the model, so
+      // "potwierdzam" cannot also be read as an instruction.
+      const awaiting = awaitingVoiceConfirmRef.current;
+      if (awaiting) {
+        const settled = await settleByVoice(awaiting, blob);
+        if (settled) return;
+        // Not a confirmation after all — fall through and treat it as an
+        // ordinary thing the driver said.
+      }
+
       const text = (await transcribe(blob, language)).trim();
       if (!text) {
         // The recording had speech-shaped audio in it but the transcriber
@@ -580,6 +715,7 @@ export function ChatScreen({
                 token={item.token}
                 tool={item.tool}
                 args={item.args}
+                voice={item.voice}
                 onDone={() => {
                   refreshVehicle();
                   refreshScheduled();

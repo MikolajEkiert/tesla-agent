@@ -22,6 +22,9 @@ export type ChatItem =
       /** The call's own arguments, carried across so the card can say which
        *  trunk or which window it is about to move. */
       args?: Record<string, unknown>;
+      /** A spoken word can settle this one right now — say so, or the shortcut
+       *  is a secret. Only true inside a conversation, and never for unlock. */
+      voice?: boolean;
     };
 
 export interface VehicleState {

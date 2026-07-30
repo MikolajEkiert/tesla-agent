@@ -53,6 +53,7 @@ export function ConfirmCard({
   token,
   tool,
   args,
+  voice,
   onDone,
   onDismiss,
 }: {
@@ -61,6 +62,8 @@ export function ConfirmCard({
   /** Straight from tool_trace — the client already holds it, so the card can
    *  say what it is about without a second round trip to the server. */
   args?: Record<string, unknown>;
+  /** Whether saying the word will settle this card right now. */
+  voice?: boolean;
   onDone: () => void;
   onDismiss: () => void;
 }) {
@@ -100,6 +103,7 @@ export function ConfirmCard({
   return (
     <View style={styles.card}>
       <Text style={styles.question}>{t("confirmQuestion", { what })}</Text>
+      {voice && <Text style={styles.voiceHint}>{t("voiceConfirmSpoken")}</Text>}
       {error && <Text style={styles.error}>{error}</Text>}
       <View style={styles.row}>
         <Pressable
@@ -180,6 +184,14 @@ const styles = StyleSheet.create({
     fontFamily: font.mono,
     fontSize: 12,
     color: color.alert,
+    marginBottom: space.sm,
+  },
+  // Quiet: it is an available shortcut, not an instruction. The buttons stay
+  // the obvious way to answer.
+  voiceHint: {
+    fontFamily: font.body,
+    fontSize: 12,
+    color: color.textTertiary,
     marginBottom: space.sm,
   },
 });

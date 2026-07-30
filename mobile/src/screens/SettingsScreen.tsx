@@ -51,6 +51,8 @@ export function SettingsScreen({
   onVoiceChange,
   bargeInEnabled,
   onBargeInChange,
+  voiceConfirmEnabled,
+  onVoiceConfirmChange,
 }: {
   onClose: () => void;
   speechMode: SpeechMode;
@@ -59,6 +61,8 @@ export function SettingsScreen({
   onVoiceChange: (voice: VoiceChoice) => void;
   bargeInEnabled: boolean;
   onBargeInChange: (enabled: boolean) => void;
+  voiceConfirmEnabled: boolean;
+  onVoiceConfirmChange: (enabled: boolean) => void;
 }) {
   const { language, setLanguage, t } = useLanguage();
   // Served by the backend rather than listed here, so the names the app offers
@@ -262,6 +266,32 @@ export function SettingsScreen({
               })}
             </View>
             <Text style={styles.hint}>{t("conversationBargeInHint")}</Text>
+
+            <Text style={[styles.label, styles.sectionGap]}>
+              {t("voiceConfirmSection")}
+            </Text>
+            <View style={styles.segmented}>
+              {(
+                [
+                  { value: true, labelKey: "voiceConfirmOn" },
+                  { value: false, labelKey: "voiceConfirmOff" },
+                ] as const
+              ).map(({ value, labelKey }) => {
+                const active = value === voiceConfirmEnabled;
+                return (
+                  <Pressable
+                    key={String(value)}
+                    onPress={() => onVoiceConfirmChange(value)}
+                    style={[styles.segment, active && styles.segmentActive]}
+                  >
+                    <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                      {t(labelKey)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={styles.hint}>{t("voiceConfirmHint")}</Text>
           </>
         )}
 

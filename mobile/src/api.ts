@@ -102,6 +102,41 @@ export async function discardAction(token: string): Promise<void> {
   }
 }
 
+/** What the server made of a spoken answer to a confirmation card. */
+export interface VoiceConfirmResult {
+  ok: boolean;
+  outcome?: "no_match" | "cancelled" | "no_speech";
+  tool?: string;
+}
+
+/**
+ * Send the recording straight to the confirmation route instead of the
+ * transcriber.
+ *
+ * The audio never goes near /chat, so the assistant is not told a word was
+ * said and cannot act on it — the server matches the phrase in code and either
+ * runs the parked command or does not. See backend/app/confirm_phrase.py.
+ */
+export async function confirmByVoice(
+  audio: Blob,
+  token: string,
+  language: string
+): Promise<VoiceConfirmResult> {
+  const query = `?token=${encodeURIComponent(token)}&language=${encodeURIComponent(language)}`;
+  const res = await fetch(`${DEFAULT_BASE_URL}/actions/confirm/voice${query}`, {
+    ...CREDENTIALS,
+    method: "POST",
+    headers: { "content-type": audio.type || "audio/wav" },
+    body: audio,
+  });
+  // 409 means the proposal is no longer voice-settleable — expired, already
+  // tried, ambiguous, or tap-only. That is an answer, not a failure: the card
+  // is still on screen and still tappable.
+  if (res.status === 409) return { ok: false, outcome: "no_match" };
+  await guard(res);
+  return res.json();
+}
+
 export async function confirmAction(token: string): Promise<void> {
   const res = await fetch(`${DEFAULT_BASE_URL}/actions/confirm`, {
     ...CREDENTIALS,
