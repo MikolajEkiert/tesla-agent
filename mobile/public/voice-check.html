@@ -115,6 +115,23 @@
       asystent będzie niemy w aucie, gdy telefon jest wyciszony.
     </div>
 
+    <h2>5 · Dźwięk z pliku (tor dla głosu z chmury)</h2>
+    <section id="file"></section>
+    <button id="playEl">Odtwórz 4 s przez &lt;audio&gt;</button>
+    <button id="playWa" class="ghost">To samo przez Web Audio (dla porównania)</button>
+    <div class="sub" style="margin-top:4px">
+      To jest <b>najważniejszy pomiar na tej stronie</b>. Głos z chmury dociera
+      jako plik i gra przez element <code>&lt;audio&gt;</code> — inną drogą niż
+      wbudowana synteza z punktu 4. Zrób tak:
+      <br />1. przełącznik ciszy (boczny) w pozycji <b>cichej</b>, głośność w górę,
+      <br />2. naciśnij <b>Odtwórz przez &lt;audio&gt;</b> i posłuchaj,
+      <br />3. zaznacz poniżej, czy było słychać.
+      <br />Jeśli nie było — głos z chmury odpada, bo asystent zamilkłby w aucie
+      przy wyciszonym telefonie.
+    </div>
+    <button id="heardYes" class="ghost">Słyszałem &lt;audio&gt; na wyciszeniu ✓</button>
+    <button id="heardNo" class="ghost">Nie słyszałem nic ✗</button>
+
     <h2>Wynik</h2>
     <pre id="out">…</pre>
     <button id="copy" class="ghost">Skopiuj wynik</button>
@@ -320,6 +337,117 @@
         }
       };
 
+      /**
+       * A four-second warble, built sample by sample without touching Web
+       * Audio.
+       *
+       * That separation is the entire point of section 5. The two playback
+       * paths on iOS obey different rules about the ringer switch, so a probe
+       * that used an AudioContext to *make* the sound and an element to play it
+       * would leave you unsure which path you actually measured. This one is
+       * arithmetic and a Blob.
+       *
+       * It warbles rather than holding a tone because a steady sine at low
+       * volume is easy to mistake for silence in a quiet room, and this
+       * measurement turns on the difference between "quiet" and "nothing".
+       */
+      function warbleBlob(seconds, sampleRate) {
+        const n = Math.floor(seconds * sampleRate);
+        const samples = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+          const t = i / sampleRate;
+          const hz = 660 + 220 * Math.sin(2 * Math.PI * 3 * t);
+          // Fade the first and last 50 ms: an abrupt start clicks, and a click
+          // is audible even when the tone under it is not.
+          const fade = Math.min(1, t / 0.05, (seconds - t) / 0.05);
+          samples[i] = 0.35 * fade * Math.sin(2 * Math.PI * hz * t);
+        }
+        return encodeWav(samples, sampleRate);
+      }
+
+      document.getElementById("playEl").onclick = async function () {
+        const btn = this;
+        btn.disabled = true;
+        try {
+          // Reported before playing: Safari's AudioSession API is the
+          // documented lever for telling the system this is playback rather
+          // than a notification bleep. If it is present, a "no" from the ear
+          // test may still be fixable; if it is absent, it is not.
+          add(
+            "file",
+            "audioSession",
+            navigator.audioSession ? String(navigator.audioSession.type) : "brak API",
+            navigator.audioSession ? "ok" : "warn"
+          );
+
+          const audio = new Audio();
+          audio.src = URL.createObjectURL(warbleBlob(4, 24000));
+          // 24 kHz on purpose: the same rate Gemini's speech models return, so
+          // this also proves the element accepts that rate at all.
+          audio.onerror = () =>
+            add("file", "elementError", String((audio.error && audio.error.code) || "?"), "bad");
+          audio.onended = () => add("file", "elementEnded", "ok", "ok");
+
+          btn.textContent = "Gra… słuchaj";
+          await audio.play();
+          add("file", "elementPlay", "started", "ok");
+          // `volume` is read after play because Safari only settles it then,
+          // and a silently zeroed volume would explain a "heard nothing" that
+          // has nothing to do with the ringer switch.
+          add("file", "elementVolume", String(audio.volume), audio.volume > 0 ? "ok" : "bad");
+          await new Promise((r) => setTimeout(r, 4200));
+          btn.textContent = "Odtwórz ponownie";
+        } catch (e) {
+          add("file", "elementPlayError", (e && e.name ? e.name + ": " + e.message : String(e)), "bad");
+          btn.textContent = "Nie udało się — spróbuj ponownie";
+        }
+        btn.disabled = false;
+      };
+
+      document.getElementById("playWa").onclick = async function () {
+        const btn = this;
+        btn.disabled = true;
+        try {
+          const ctx = new AC();
+          if (ctx.state === "suspended") await ctx.resume();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          const lfo = ctx.createOscillator();
+          const lfoGain = ctx.createGain();
+          lfo.frequency.value = 3;
+          lfoGain.gain.value = 220;
+          lfo.connect(lfoGain).connect(osc.frequency);
+          osc.frequency.value = 660;
+          gain.gain.value = 0.35;
+          osc.connect(gain).connect(ctx.destination);
+          osc.start();
+          lfo.start();
+          btn.textContent = "Gra… słuchaj";
+          await new Promise((r) => setTimeout(r, 4000));
+          osc.stop();
+          lfo.stop();
+          ctx.close();
+          add("file", "webAudioPlayed", "ok", "ok");
+          btn.textContent = "Odtwórz ponownie (Web Audio)";
+        } catch (e) {
+          add("file", "webAudioError", String((e && e.message) || e), "bad");
+          btn.textContent = "Nie udało się — spróbuj ponownie";
+        }
+        btn.disabled = false;
+      };
+
+      // The one thing no API can answer. Whether sound left the speaker with
+      // the ringer switch silent is only knowable by listening, so the ear is
+      // the instrument here and these two buttons are how the reading gets
+      // written down next to the automated ones.
+      function recordHeard(heard) {
+        add("file", "heardOnSilentSwitch", heard ? "TAK" : "NIE", heard ? "ok" : "bad");
+        document.getElementById("heardYes").disabled = true;
+        document.getElementById("heardNo").disabled = true;
+      }
+      document.getElementById("heardYes").onclick = () => recordHeard(true);
+      document.getElementById("heardNo").onclick = () => recordHeard(false);
+
       document.getElementById("copy").onclick = async function () {
         const text = JSON.stringify(results, null, 1);
         try {
@@ -371,6 +499,18 @@
       safe("asr", "SpeechRecognition", () => !!SR, (v) => (v ? "ok" : "warn"));
 
       safe("tts", "speechSynthesis", () => !!synth, yesNo);
+
+      safe("file", "audioElement", () => typeof window.Audio === "function", yesNo);
+      safe("file", "audioSessionAPI", () => !!navigator.audioSession, (v) => (v ? "ok" : "warn"));
+      // Which of the cloud formats this browser would take. WAV keeps the
+      // backend simple, but if only mp4/aac plays here, the server has to
+      // transcode what the speech model returns.
+      safe("file", "canPlay", () => {
+        const probe = document.createElement("audio");
+        return ["audio/wav", "audio/mpeg", "audio/mp4", "audio/aac", "audio/ogg"]
+          .map((t) => t + "=" + (probe.canPlayType(t) || "nie"))
+          .join(", ");
+      });
 
       function listVoices() {
         safe("tts", "voicesTotal", () => synth.getVoices().length);
