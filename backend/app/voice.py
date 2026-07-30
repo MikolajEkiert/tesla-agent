@@ -70,6 +70,20 @@ _DOMAIN_HINT = (
 # latency and the free-tier quota spent per question for the same outcome.
 # The instruction is deliberately narrow — remove the disfluency, never the
 # content — so "false starts" cannot become licence to paraphrase.
+#
+# The explicit "do not guess" line below exists because the client got a live
+# example of what happens without it: the conversation loop sent a recording
+# of cabin/road noise — nobody had said anything — and this call handed back
+# a complete, plausible Polish command ("Podnieś temperaturę o pięć stopni"),
+# which then actually adjusted the climate, because climate is intentionally
+# ungated. That is a speech model doing exactly what _DOMAIN_HINT nudges it
+# toward when there is nothing real to transcribe: filling ambiguous audio
+# with the most likely sentence from the vocabulary it was just handed,
+# rather than admitting it heard nothing. The client-side fix (recorder.ts,
+# stop()) now refuses to send audio that never crossed a sustained speech
+# threshold at all, which closes the main path this came from — but this
+# instruction is the second, independent layer against the same failure mode,
+# for whatever audio still reaches this call.
 _PROMPT = (
     "Transcribe the speech in this audio. Drop filler sounds and false starts — "
     "\"yyy\", \"eee\", \"um\", a word or phrase abandoned and restarted mid-sentence "
@@ -77,6 +91,10 @@ _PROMPT = (
     "paraphrase, summarise, translate, or reword anything beyond removing those "
     "disfluencies: every number, name, and word said on purpose must come "
     "through unchanged. "
+    "If the audio is silence, background noise, wind, engine or road sound, or "
+    "otherwise has no clear, confident speech in it, output nothing at all — do "
+    "not guess a plausible-sounding sentence from the vocabulary below just "
+    "because it would fit the topic. A wrong guess is worse than no answer. "
     "Output only the transcript itself — no translation, no commentary, no "
     "surrounding quotation marks, no preamble. "
     "If there is no intelligible speech, output nothing at all. "

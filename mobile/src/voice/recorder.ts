@@ -119,11 +119,20 @@ function encodeWav(samples: Float32Array, sampleRate: number): Blob {
  *
  * A single peak threshold is not enough by itself — silence *before* any
  * speech is just "hasn't started yet", not "done talking" — so this only
- * starts the silence clock once a frame has actually crossed the threshold.
+ * starts the silence clock once the level has *held* above threshold for
+ * speechSustainMs, not on the first loud frame. That distinction turned out
+ * to matter for more than false starts: a single frame over threshold — a
+ * bump, a gear click, a door — used to be enough to mark the recording as
+ * "contained speech" for good, which meant a conversation turn with nothing
+ * actually said in it could still end up transcribed instead of discarded.
+ * See stop() below for the other half of that fix.
  */
 export interface Endpointing {
   /** Peak level, 0..1, that counts as speech rather than road noise. */
   speechThreshold: number;
+  /** How long the level has to hold above threshold before it counts as
+   *  speech actually starting, rather than a single loud instant. */
+  speechSustainMs: number;
   /** How long a hush has to hold, after speech was heard, before it reads as
    *  a finished sentence rather than a breath between words. */
   silenceMs: number;
@@ -152,6 +161,7 @@ export class VoiceRecorder {
   private stopping = false;
   private hasSpeech = false;
   private lastVoiceAt = 0;
+  private speechOnsetAt: number | null = null;
   private onsetStartAt: number | null = null;
   private onsetFired = false;
 
@@ -198,6 +208,7 @@ export class VoiceRecorder {
     this.stopping = false;
     this.hasSpeech = false;
     this.lastVoiceAt = 0;
+    this.speechOnsetAt = null;
     this.onsetStartAt = null;
     this.onsetFired = false;
     this.source = this.context!.createMediaStreamSource(this.stream);
@@ -242,12 +253,21 @@ export class VoiceRecorder {
     if (this.endpointing) {
       const now = Date.now();
       if (peak >= this.endpointing.speechThreshold) {
-        this.hasSpeech = true;
+        if (this.speechOnsetAt === null) this.speechOnsetAt = now;
+        if (!this.hasSpeech && now - this.speechOnsetAt >= this.endpointing.speechSustainMs) {
+          this.hasSpeech = true;
+        }
+        // The silence clock resets on every loud frame, sustained or not —
+        // still talking is still talking even before speechSustainMs has
+        // fully elapsed.
         this.lastVoiceAt = now;
-      } else if (this.hasSpeech && now - this.lastVoiceAt >= this.endpointing.silenceMs) {
-        this.stopping = true;
-        this.onAutoStop?.();
-        return;
+      } else {
+        this.speechOnsetAt = null;
+        if (this.hasSpeech && now - this.lastVoiceAt >= this.endpointing.silenceMs) {
+          this.stopping = true;
+          this.onAutoStop?.();
+          return;
+        }
       }
     }
 
@@ -278,9 +298,21 @@ export class VoiceRecorder {
     const rate = this.context?.sampleRate ?? SAMPLE_RATE;
     const chunks = this.chunks;
     const frames = this.frames;
+    const requireSpeech = !!this.endpointing;
+    const hadSpeech = this.hasSpeech;
     this.release();
 
     if (frames / rate < MIN_SECONDS) throw new NothingRecordedError("too short");
+    // Endpointing's own read is the authority when it's configured — it
+    // watched the whole recording for level held above a real speech
+    // threshold, where the peak check below only asks "was any single
+    // sample above 0.005 anywhere in the buffer", a bar cabin noise, road
+    // vibration, or a single bump clears without anyone having said a word.
+    // That gap is why an empty conversation turn could end up transcribed
+    // instead of discarded — including the worst case, MAX_SECONDS elapsing
+    // on nothing but engine noise and 30 seconds of it going to the
+    // transcriber. This is the fix: no detected speech, no transcription.
+    if (requireSpeech && !hadSpeech) throw new NothingRecordedError("silence");
 
     const merged = new Float32Array(frames);
     let offset = 0;

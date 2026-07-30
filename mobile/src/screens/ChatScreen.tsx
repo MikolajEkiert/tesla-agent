@@ -64,6 +64,15 @@ const CONVERSATION_SILENCE_MS = 1100;
  *  above the 0.005 the recorder itself treats as "recorded nothing at all". */
 const CONVERSATION_SPEECH_THRESHOLD = 0.02;
 
+/** How long the level has to hold above that threshold before it counts as
+ *  speech actually starting. Without this, a single loud frame — a bump, a
+ *  gear click, a door — used to be enough to mark the whole recording as
+ *  "contained speech", which meant an empty turn (nobody said anything,
+ *  MAX_SECONDS just ran out on cabin noise) could still reach the
+ *  transcriber. Short enough that it adds no perceptible delay to a real
+ *  sentence starting. */
+const CONVERSATION_SPEECH_SUSTAIN_MS = 150;
+
 /**
  * Peak level that counts as a deliberate interruption while the assistant is
  * talking, rather than its own reply leaking back through imperfect echo
@@ -443,6 +452,7 @@ export function ChatScreen({
     const recorder = new VoiceRecorder();
     recorder.endpointing = {
       speechThreshold: CONVERSATION_SPEECH_THRESHOLD,
+      speechSustainMs: CONVERSATION_SPEECH_SUSTAIN_MS,
       silenceMs: CONVERSATION_SILENCE_MS,
     };
     recorder.onLevel = setConversationLevel;
