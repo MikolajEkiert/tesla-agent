@@ -2,14 +2,100 @@
 
 Everything here composes adapter calls with the scheduler. Kept out of
 tools.py so that module stays a flat name -> adapter mapping.
+
+It also owns the confirmation gate for physically consequential commands.
+That gate exists because the assistant's context is not trustworthy input:
+charger and place lookups pull free text straight out of OpenStreetMap and
+Nominatim, which anyone may edit anonymously, and that text is handed back to
+the model as a tool result. A model that treats such text as an instruction
+could reach `unlock`, `actuate_trunk` or `trigger_homelink` — the garage door.
+The system prompt asks the model to confirm first, but a prompt is guidance,
+not a control.
+
+So the authority to *execute* those commands is taken away from the model
+entirely. The model may only propose them; the proposal is parked server-side
+and executed by a separate endpoint that a human taps. Prompt injection can
+therefore at most make an unexpected confirmation card appear, which is
+visible and refusable — not a silently opened car.
 """
 from __future__ import annotations
 
+import secrets
 import time
 from typing import Any
 
 from app import scheduler
 from app.tesla.adapter import TeslaAdapter
+
+# Commands whose effect is physical, immediate and hard to undo. Climate and
+# charging are deliberately absent: they are reversible, cost only energy, and
+# gating them would train the owner to tap "confirm" without reading — which
+# is how a confirmation habit stops being a safeguard.
+CONFIRM_REQUIRED = {
+    "unlock",
+    "actuate_trunk",
+    "trigger_homelink",
+    "control_windows",
+    "set_sentry_mode",
+}
+
+# A proposal is worthless to an attacker after a moment, and expiring them
+# keeps a stale card from being tapped much later out of context.
+PENDING_TTL_S = 120
+_pending: dict[str, dict[str, Any]] = {}
+
+
+def needs_confirmation(tool: str) -> bool:
+    return tool in CONFIRM_REQUIRED
+
+
+def _prune_pending(now: float) -> None:
+    for token, entry in list(_pending.items()):
+        if now - entry["created_at"] > PENDING_TTL_S:
+            del _pending[token]
+
+
+def propose(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Park a sensitive command and return what the model should tell the user.
+
+    Deliberately returns no error: the model's job here is to relay that a
+    confirmation is waiting, not to retry or find a way around it.
+    """
+    now = time.time()
+    _prune_pending(now)
+    token = secrets.token_urlsafe(16)
+    _pending[token] = {"tool": tool, "args": args, "created_at": now}
+    return {
+        "confirmation_required": True,
+        "confirm_token": token,
+        "tool": tool,
+        "args": args,
+        "expires_in_seconds": PENDING_TTL_S,
+        "message": (
+            "Not executed. This command needs the owner to confirm it in the app. "
+            "Tell them what is waiting and stop — do not retry or call other tools "
+            "to achieve the same effect."
+        ),
+    }
+
+
+def peek_pending(token: str) -> dict[str, Any] | None:
+    _prune_pending(time.time())
+    entry = _pending.get(token)
+    return None if entry is None else {"tool": entry["tool"], "args": entry["args"]}
+
+
+async def confirm(adapter: TeslaAdapter, token: str) -> dict[str, Any]:
+    """Execute a parked command. Single use, so a replayed tap cannot fire it
+    twice."""
+    _prune_pending(time.time())
+    entry = _pending.pop(token, None)
+    if entry is None:
+        raise ValueError("This confirmation has expired or was already used.")
+    # Imported here to avoid a circular import (tools imports this module).
+    from app.tools import dispatch_unguarded
+
+    return await dispatch_unguarded(adapter, entry["tool"], entry["args"])
 
 # The car's own remote-climate auto-off is firmware-dependent and unreliable
 # (see scheduler.py), so our stop job is the real limit. 30 minutes is well

@@ -329,8 +329,54 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+# Server-side bounds, applied regardless of what the model sends. The JSON
+# schema advertised to the model is a hint to it, not a guarantee to us: the
+# model may emit anything, and after an injected instruction it may do so
+# deliberately.
+NUMERIC_BOUNDS = {
+    "set_climate_temp": {"celsius": (15, 28)},
+    "set_charge_limit": {"percent": (50, 100)},
+    "set_seat_heater": {"level": (0, 3)},
+    "schedule_climate": {"celsius": (15, 28), "run_for_minutes": (1, 30)},
+    "set_scheduled_charging": {"hour": (0, 23), "minute": (0, 59)},
+}
+
+
+def _validate(name: str, args: dict[str, Any]) -> None:
+    for field, (low, high) in NUMERIC_BOUNDS.get(name, {}).items():
+        if field not in args or args[field] is None:
+            continue
+        try:
+            value = float(args[field])
+        except (TypeError, ValueError):
+            raise ValueError(f"{field} must be a number")
+        if not low <= value <= high:
+            raise ValueError(f"{field} must be between {low} and {high}")
+
+
 async def dispatch(adapter: TeslaAdapter, name: str, args: dict[str, Any]) -> dict[str, Any]:
-    """Route a tool call to the adapter. Returns a JSON-serializable result."""
+    """Route a tool call to the adapter, refusing to *execute* the physically
+    consequential ones on the model's word alone.
+
+    Sensitive commands come back as a proposal the owner must tap to confirm
+    (see app.actions). Everything reachable from here may have been chosen by a
+    model whose context contains anonymously-editable map text, so the gate
+    lives in code rather than in the prompt.
+    """
+    _validate(name, args)
+    if actions.needs_confirmation(name):
+        return actions.propose(name, args)
+    return await dispatch_unguarded(adapter, name, args)
+
+
+async def dispatch_unguarded(
+    adapter: TeslaAdapter, name: str, args: dict[str, Any]
+) -> dict[str, Any]:
+    """The raw routing table. Only two callers may use it: `dispatch` (for
+    commands that need no confirmation) and `actions.confirm` (after a human
+    tapped). The scheduler goes through `dispatch`, so a queued job can never
+    smuggle in a sensitive command either."""
+    _validate(name, args)
     handlers = {
         "get_vehicle_state": lambda: adapter.get_state(),
         "set_climate_temp": lambda: adapter.set_temperature(args["celsius"]),
