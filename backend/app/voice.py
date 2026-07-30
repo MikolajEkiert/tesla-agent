@@ -20,6 +20,7 @@ import os
 import re
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 from app.config import get_settings
@@ -114,8 +115,10 @@ def _model() -> str:
     model left "chciałbym, chciałbym" and "no na" untouched, a full-size flash
     model cleaned both. Quotas are tracked per model, so pointing
     GEMINI_TRANSCRIBE_MODEL at a stronger one costs nothing from the chat
-    model's daily budget — it is a separate free-tier allowance, likely a
-    smaller one, which is the actual trade being made by overriding this."""
+    model's daily budget — it is a separate, likely smaller, free-tier
+    allowance. transcribe() falls back to the chat model on 429 from this one,
+    so running out for the day degrades to plainer transcripts rather than to
+    no voice input at all."""
     return os.getenv("GEMINI_TRANSCRIBE_MODEL") or get_settings().gemini_model
 
 
@@ -137,18 +140,33 @@ async def transcribe(audio: bytes, mime_type: str, language: str | None = None) 
 
     hint = _LANGUAGE_HINTS.get((language or "").lower(), "")
     client = genai.Client(api_key=settings.gemini_api_key)
-    resp = await client.aio.models.generate_content(
-        model=_model(),
-        contents=[
-            types.Part.from_bytes(data=audio, mime_type=mime_type),
-            types.Part.from_text(text=f"{_PROMPT} {hint} {_DOMAIN_HINT}".strip()),
-        ],
-        config=types.GenerateContentConfig(
-            temperature=0,
-            # No tools and no system prompt on purpose — this call transcribes
-            # and has no business reaching the car.
-            response_modalities=["TEXT"],
-        ),
+    contents = [
+        types.Part.from_bytes(data=audio, mime_type=mime_type),
+        types.Part.from_text(text=f"{_PROMPT} {hint} {_DOMAIN_HINT}".strip()),
+    ]
+    config = types.GenerateContentConfig(
+        temperature=0,
+        # No tools and no system prompt on purpose — this call transcribes
+        # and has no business reaching the car.
+        response_modalities=["TEXT"],
     )
+
+    primary = _model()
+    fallback = settings.gemini_model
+    try:
+        resp = await client.aio.models.generate_content(
+            model=primary, contents=contents, config=config
+        )
+    except genai_errors.ClientError as e:
+        # Only a spent daily quota is worth retrying on a different model — a
+        # bad request or a content-safety block would fail the same way twice.
+        # Nothing to retry with either, when GEMINI_TRANSCRIBE_MODEL was never
+        # set and primary already *is* the chat model.
+        if e.code != 429 or primary == fallback:
+            raise
+        print(f"voice.transcribe: {primary} exhausted, retrying on {fallback}")
+        resp = await client.aio.models.generate_content(
+            model=fallback, contents=contents, config=config
+        )
     text = (resp.text or "").strip()[:MAX_TRANSCRIPT_CHARS]
     return text if _looks_like_speech(text) else ""
