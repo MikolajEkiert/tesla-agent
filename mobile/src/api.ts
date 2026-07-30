@@ -217,6 +217,26 @@ export async function fetchSpeech(
   return res.blob();
 }
 
+/**
+ * A one-use credential for the phone's own audio session.
+ *
+ * Short-lived and bound server-side to one model and configuration, so what
+ * arrives here cannot be turned into anything else — and the session it opens
+ * has no tools, so it can talk but not act. See backend/app/live.py.
+ */
+export async function fetchLiveToken(
+  voice: string
+): Promise<{ token: string; model: string; expires_in_seconds: number }> {
+  const res = await fetch(`${DEFAULT_BASE_URL}/voice/live-token`, {
+    ...CREDENTIALS,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ voice }),
+  });
+  await guard(res);
+  return res.json();
+}
+
 export async function fetchVoices(): Promise<{ voices: string[]; default: string }> {
   const res = await fetch(`${DEFAULT_BASE_URL}/voice/voices`, CREDENTIALS);
   await guard(res);

@@ -48,13 +48,16 @@ import {
 } from "../voice/speak";
 import {
   loadBargeIn,
+  loadLiveMode,
   loadVoiceConfirm,
   NothingRecordedError,
   saveBargeIn,
+  saveLiveMode,
   saveVoiceConfirm,
   VoiceRecorder,
   voiceInputSupported,
 } from "../voice/recorder";
+import { LiveSession, liveSupported } from "../voice/live";
 import type { ChatItem, ScheduledAction, VehicleState } from "../types";
 
 /** How long a hush has to hold, once the driver has started talking, before a
@@ -161,6 +164,11 @@ export function ChatScreen({
   // refused, or superseded — so the word can never apply to a card the driver
   // has stopped thinking about.
   const awaitingVoiceConfirmRef = useRef<{ token: string; tool: string } | null>(null);
+  const [liveEnabled, setLiveEnabled] = useState(true);
+  // Non-null while a conversation is running over the live audio session. Its
+  // presence is what the rest of the loop branches on: with a session open the
+  // recorder, the transcription call and Cloud TTS are all bypassed.
+  const liveRef = useRef<LiveSession | null>(null);
   // Indirection so handleSend's useCallback deps don't have to include
   // functions that are themselves redefined every render (and that in turn
   // call handleSend) — that pair would otherwise be circular.
@@ -199,6 +207,7 @@ export function ChatScreen({
     });
     loadBargeIn().then(setBargeInEnabled);
     loadVoiceConfirm().then(setVoiceConfirmEnabled);
+    loadLiveMode().then(setLiveEnabled);
     // Leaving the screen mid-sentence should not leave a voice talking to an
     // empty room — the synthesiser outlives the component otherwise. Same
     // reasoning for a conversation's open microphone, capturing or watching.
@@ -206,6 +215,7 @@ export function ChatScreen({
       stopSpeaking();
       conversationRecorderRef.current?.cancel();
       bargeInWatcherRef.current?.cancel();
+      liveRef.current?.stop();
     };
   }, [refreshVehicle, refreshScheduled]);
 
@@ -239,6 +249,14 @@ export function ChatScreen({
     setVoiceChoice(choice);
     setActiveVoice(choice);
     saveVoiceChoice(choice);
+  }, []);
+
+  const changeLiveMode = useCallback((enabled: boolean) => {
+    setLiveEnabled(enabled);
+    saveLiveMode(enabled);
+    // Takes effect on the next conversation rather than tearing down the one
+    // in progress — switching transport mid-sentence would be worse than
+    // finishing the exchange the old way.
   }, []);
 
   const changeVoiceConfirm = useCallback((enabled: boolean) => {
@@ -370,7 +388,18 @@ export function ChatScreen({
         // voice conversation with a silent assistant makes no sense, and the
         // silence would also strand the loop with nothing to cue the next
         // listen.
-        if (conversationTurn || speechMode === "always" || (speechMode === "voice" && viaVoice)) {
+        // With a live session open the reply is spoken down the same socket
+        // that heard the question — no synthesis round trip, and the words
+        // start arriving while they are still being made.
+        if (conversationTurn && liveRef.current) {
+          setSpeaking(true);
+          setConversationPhase("speaking");
+          liveRef.current.speak(res.reply);
+        } else if (
+          conversationTurn ||
+          speechMode === "always" ||
+          (speechMode === "voice" && viaVoice)
+        ) {
           // Optimistic, not event-driven: the stop control has to exist from
           // the instant speech is asked for. Waiting for a start event would
           // leave the first moments unstoppable, and some engines never send
@@ -436,6 +465,8 @@ export function ChatScreen({
         onBargeInChange={changeBargeIn}
         voiceConfirmEnabled={voiceConfirmEnabled}
         onVoiceConfirmChange={changeVoiceConfirm}
+        liveEnabled={liveEnabled}
+        onLiveChange={changeLiveMode}
       />
     );
   }
@@ -491,6 +522,8 @@ export function ChatScreen({
     stopBargeInWatcher();
     conversationRecorderRef.current?.cancel();
     conversationRecorderRef.current = null;
+    liveRef.current?.stop();
+    liveRef.current = null;
     halt();
   };
   stopConversationRef.current = stopConversation;
@@ -655,6 +688,59 @@ export function ChatScreen({
     }
   };
 
+  /**
+   * Open a live session, or say why not.
+   *
+   * Falling back rather than failing is the whole point: a refused token, a
+   * blocked socket or a flaky tunnel drops the conversation onto the
+   * record-and-upload path that has been working all along, and the driver
+   * hears a slightly slower assistant instead of none.
+   */
+  const startLive = async (): Promise<boolean> => {
+    if (!liveEnabled || !liveSupported() || voiceChoice === "device") return false;
+    const session = new LiveSession({
+      onLevel: setConversationLevel,
+      onTranscript: (text) => {
+        emptyTurnsRef.current = 0;
+        setConversationPhase("thinking");
+        void handleSend(text, true, true);
+      },
+      onSilence: () => {
+        emptyTurnsRef.current += 1;
+        if (emptyTurnsRef.current >= CONVERSATION_MAX_EMPTY_TURNS) stopConversation();
+        else session.listen();
+      },
+      onBargeIn: () => {
+        setSpeaking(false);
+        setConversationPhase("listening");
+      },
+      onSpokenEnd: () => {
+        setSpeaking(false);
+        if (conversationActiveRef.current) {
+          setConversationPhase("listening");
+          session.listen();
+        }
+      },
+      onClosed: () => {
+        // Gone mid-conversation. Drop to the old path rather than ending the
+        // exchange the driver is in the middle of.
+        if (liveRef.current !== session) return;
+        liveRef.current = null;
+        if (conversationActiveRef.current) listenAgain();
+      },
+    });
+    try {
+      await session.start(voiceChoice);
+      liveRef.current = session;
+      session.listen();
+      setConversationPhase("listening");
+      return true;
+    } catch {
+      session.stop();
+      return false;
+    }
+  };
+
   const startConversation = () => {
     if (!voiceInputSupported() || conversationActiveRef.current) return;
     setError(null);
@@ -664,10 +750,26 @@ export function ChatScreen({
     primeSpeech();
     conversationActiveRef.current = true;
     setConversationActive(true);
-    listenAgain();
+    setConversationPhase("listening");
+    // Try the live session first; listenAgain is the fallback and also the
+    // path when live is switched off.
+    void startLive().then((live) => {
+      if (!live && conversationActiveRef.current) listenAgain();
+    });
   };
 
   const handleConversationTap = () => {
+    // The live session owns its own turn boundaries, so the tap means the same
+    // two things but has to be told to the socket rather than to a recorder.
+    if (liveRef.current) {
+      if (conversationPhase === "listening") liveRef.current.endTurn();
+      else if (conversationPhase === "speaking") {
+        setSpeaking(false);
+        setConversationPhase("listening");
+        liveRef.current.listen();
+      }
+      return;
+    }
     if (conversationPhase === "listening") {
       // Don't make the driver wait out the silence timer once they know
       // they're done — the same "release early" affordance hold-to-talk

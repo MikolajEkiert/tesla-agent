@@ -116,6 +116,11 @@ const STRINGS = {
       "In a conversation, say \"confirm\" to approve what's waiting instead of reaching for the screen. Unlocking the car always needs a tap. Anyone within earshot can say the word too, so turn this off if you often drive with passengers.",
     voiceConfirmSpoken: "Say \"confirm\" or tap",
     voiceConfirmMissed: "I didn't catch that — tap to confirm.",
+    liveSection: "Conversation mode",
+    liveOn: "Live audio",
+    liveOff: "Recordings",
+    liveHint:
+      "\"Live audio\" streams the conversation both ways: your words are recognised as you speak them and the reply starts before it's finished being made. It plays through a different audio route than recordings do, so if the assistant goes quiet with the phone on silent, switch back to \"Recordings\" — that route is measured to play regardless.",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -227,6 +232,11 @@ const STRINGS = {
       "W rozmowie powiedz „potwierdzam”, żeby zatwierdzić to, co czeka, zamiast sięgać po ekran. Otwarcie auta zawsze wymaga dotknięcia. To słowo może wypowiedzieć każdy w zasięgu głosu, więc wyłącz to, jeśli często wozisz pasażerów.",
     voiceConfirmSpoken: "Powiedz „potwierdzam” albo dotknij",
     voiceConfirmMissed: "Nie zrozumiałem — dotknij, żeby potwierdzić.",
+    liveSection: "Tryb rozmowy",
+    liveOn: "Na żywo",
+    liveOff: "Nagrania",
+    liveHint:
+      "„Na żywo” przesyła rozmowę strumieniem w obie strony: Twoje słowa są rozpoznawane w trakcie mówienia, a odpowiedź zaczyna płynąć, zanim powstanie w całości. Idzie inną drogą dźwięku niż nagrania, więc jeśli asystent zamilknie przy wyciszonym telefonie, wróć na „Nagrania” — ta droga jest zmierzona i gra niezależnie od przełącznika.",
   },
 } as const;
 

@@ -53,6 +53,8 @@ export function SettingsScreen({
   onBargeInChange,
   voiceConfirmEnabled,
   onVoiceConfirmChange,
+  liveEnabled,
+  onLiveChange,
 }: {
   onClose: () => void;
   speechMode: SpeechMode;
@@ -63,6 +65,8 @@ export function SettingsScreen({
   onBargeInChange: (enabled: boolean) => void;
   voiceConfirmEnabled: boolean;
   onVoiceConfirmChange: (enabled: boolean) => void;
+  liveEnabled: boolean;
+  onLiveChange: (enabled: boolean) => void;
 }) {
   const { language, setLanguage, t } = useLanguage();
   // Served by the backend rather than listed here, so the names the app offers
@@ -292,6 +296,30 @@ export function SettingsScreen({
               })}
             </View>
             <Text style={styles.hint}>{t("voiceConfirmHint")}</Text>
+
+            <Text style={[styles.label, styles.sectionGap]}>{t("liveSection")}</Text>
+            <View style={styles.segmented}>
+              {(
+                [
+                  { value: true, labelKey: "liveOn" },
+                  { value: false, labelKey: "liveOff" },
+                ] as const
+              ).map(({ value, labelKey }) => {
+                const active = value === liveEnabled;
+                return (
+                  <Pressable
+                    key={String(value)}
+                    onPress={() => onLiveChange(value)}
+                    style={[styles.segment, active && styles.segmentActive]}
+                  >
+                    <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                      {t(labelKey)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={styles.hint}>{t("liveHint")}</Text>
           </>
         )}
 

@@ -91,6 +91,36 @@ export async function loadVoiceConfirm(): Promise<boolean> {
   return true;
 }
 
+const LIVE_KEY = "amp.live";
+
+/**
+ * Whether a conversation runs over a live audio session or the older
+ * record-and-upload path.
+ *
+ * A setting rather than a silent upgrade, because the live path streams its
+ * replies through Web Audio — the one output route measured as obeying the
+ * iPhone's ringer switch. If it turns out to be mute on silent in the car,
+ * this is the way back, and it needs to be reachable without a deploy.
+ */
+export async function loadLiveMode(): Promise<boolean> {
+  try {
+    const stored = await AsyncStorage.getItem(LIVE_KEY);
+    if (stored === "0") return false;
+    if (stored === "1") return true;
+  } catch {
+    // storage unavailable — the default stands
+  }
+  return true;
+}
+
+export async function saveLiveMode(enabled: boolean): Promise<void> {
+  try {
+    await AsyncStorage.setItem(LIVE_KEY, enabled ? "1" : "0");
+  } catch {
+    // best-effort persistence only
+  }
+}
+
 export async function saveVoiceConfirm(enabled: boolean): Promise<void> {
   try {
     await AsyncStorage.setItem(VOICE_CONFIRM_KEY, enabled ? "1" : "0");
