@@ -3,6 +3,7 @@ import { ActivityIndicator, Platform, Pressable, StyleSheet, View } from "react-
 import { NotUnlockedError, transcribe } from "../api";
 import { useLanguage } from "../LanguageContext";
 import { color, radius } from "../theme";
+import { primeSpeech } from "../voice/speak";
 import {
   NothingRecordedError,
   VoiceRecorder,
@@ -83,6 +84,9 @@ export function VoiceButton({
     if (phase !== "idle" || disabled) return;
     releasedRef.current = false;
     onStatus(null);
+    // The reply arrives seconds from now, long after iOS stops counting this
+    // as a user gesture — so unlock speech while the finger is still down.
+    primeSpeech();
 
     const recorder = new VoiceRecorder();
     recorder.onLevel = (value) => {

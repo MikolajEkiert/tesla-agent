@@ -18,15 +18,30 @@ import {
   type Passkey,
 } from "../api";
 import { useLanguage } from "../LanguageContext";
-import type { Language } from "../i18n";
+import type { Language, TranslationKey } from "../i18n";
 import { color, font, radius, space } from "../theme";
+import { speechSupported, type SpeechMode } from "../voice/speak";
 
 const LANGUAGES: { code: Language; labelKey: "langEnglish" | "langPolish" }[] = [
   { code: "en", labelKey: "langEnglish" },
   { code: "pl", labelKey: "langPolish" },
 ];
 
-export function SettingsScreen({ onClose }: { onClose: () => void }) {
+const SPEECH_MODES: { mode: SpeechMode; labelKey: TranslationKey }[] = [
+  { mode: "off", labelKey: "speechOff" },
+  { mode: "voice", labelKey: "speechVoice" },
+  { mode: "always", labelKey: "speechAlways" },
+];
+
+export function SettingsScreen({
+  onClose,
+  speechMode,
+  onSpeechModeChange,
+}: {
+  onClose: () => void;
+  speechMode: SpeechMode;
+  onSpeechModeChange: (mode: SpeechMode) => void;
+}) {
   const { language, setLanguage, t } = useLanguage();
   const [passkeys, setPasskeys] = useState<Passkey[]>([]);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
@@ -94,6 +109,29 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
           })}
         </View>
         <Text style={styles.hint}>{t("settingsLanguageHint")}</Text>
+
+        {speechSupported() && (
+          <>
+            <Text style={[styles.label, styles.sectionGap]}>{t("speechSection")}</Text>
+            <View style={styles.segmented}>
+              {SPEECH_MODES.map(({ mode, labelKey }) => {
+                const active = mode === speechMode;
+                return (
+                  <Pressable
+                    key={mode}
+                    onPress={() => onSpeechModeChange(mode)}
+                    style={[styles.segment, active && styles.segmentActive]}
+                  >
+                    <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                      {t(labelKey)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={styles.hint}>{t("speechHint")}</Text>
+          </>
+        )}
 
         <Text style={[styles.label, styles.sectionGap]}>{t("passkeySection")}</Text>
         {!passkeysSupported() ? (

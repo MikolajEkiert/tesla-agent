@@ -80,6 +80,12 @@ const STRINGS = {
     voiceSilence: "Didn't catch anything",
     voiceDenied: "Microphone access denied",
     voiceFailed: "Couldn't transcribe that",
+    speechSection: "Spoken replies",
+    speechOff: "Off",
+    speechVoice: "After voice",
+    speechAlways: "Always",
+    speechHint:
+      "Reads the assistant's reply aloud. \"After voice\" only speaks when you asked out loud — worth keeping, since the phone's voice plays even on silent.",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -155,6 +161,12 @@ const STRINGS = {
     voiceSilence: "Nic nie usłyszałem",
     voiceDenied: "Brak dostępu do mikrofonu",
     voiceFailed: "Nie udało się rozpoznać mowy",
+    speechSection: "Czytanie odpowiedzi",
+    speechOff: "Nigdy",
+    speechVoice: "Po głosie",
+    speechAlways: "Zawsze",
+    speechHint:
+      "Czyta odpowiedź asystenta na głos. „Po głosie” odzywa się tylko wtedy, gdy sam zapytałeś głosem — warto przy tym zostać, bo głos telefonu gra także przy wyciszeniu.",
   },
 } as const;
 

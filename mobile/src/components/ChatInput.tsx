@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { useLanguage } from "../LanguageContext";
 import { color, font, radius, space } from "../theme";
+import { primeSpeech } from "../voice/speak";
 import { VoiceButton } from "./VoiceButton";
 
 export function ChatInput({
@@ -16,7 +17,8 @@ export function ChatInput({
   disabled,
   onLocked,
 }: {
-  onSend: (text: string) => void;
+  /** `viaVoice` decides whether the reply gets read aloud — see SpeechMode. */
+  onSend: (text: string, viaVoice?: boolean) => void;
   disabled: boolean;
   onLocked?: () => void;
 }) {
@@ -29,6 +31,8 @@ export function ChatInput({
 
   const submit = () => {
     if (!canSend) return;
+    // Still inside the tap, which is the only moment iOS lets us unlock speech.
+    primeSpeech();
     onSend(text.trim());
     setText("");
   };
@@ -66,7 +70,7 @@ export function ChatInput({
           </Pressable>
         ) : (
           <VoiceButton
-            onTranscript={onSend}
+            onTranscript={(spoken) => onSend(spoken, true)}
             onStatus={setVoiceStatus}
             onLocked={onLocked}
             disabled={disabled}

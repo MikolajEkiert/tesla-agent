@@ -28,6 +28,14 @@ import { greeting } from "../i18n";
 import { useLanguage } from "../LanguageContext";
 import { SettingsScreen } from "./SettingsScreen";
 import { color, font, space } from "../theme";
+import {
+  DEFAULT_SPEECH_MODE,
+  loadSpeechMode,
+  saveSpeechMode,
+  speak,
+  stopSpeaking,
+  type SpeechMode,
+} from "../voice/speak";
 import type { ChatItem, ScheduledAction, VehicleState } from "../types";
 
 /** Countdowns in the drawer would otherwise sit frozen while it's open. */
@@ -58,6 +66,7 @@ export function ChatScreen({
       text: justConnected ? t("connectedGreeting") : greeting(language, new Date().getHours()),
     },
   ]);
+  const [speechMode, setSpeechMode] = useState<SpeechMode>(DEFAULT_SPEECH_MODE);
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
   const [vehicle, setVehicle] = useState<VehicleState | null>(null);
   const [pending, setPending] = useState(false);
@@ -85,7 +94,17 @@ export function ChatScreen({
   useEffect(() => {
     refreshVehicle();
     refreshScheduled();
+    loadSpeechMode().then(setSpeechMode);
+    // Leaving the screen mid-sentence should not leave a voice talking to an
+    // empty room — the synthesiser outlives the component otherwise.
+    return stopSpeaking;
   }, [refreshVehicle, refreshScheduled]);
+
+  const changeSpeechMode = useCallback((mode: SpeechMode) => {
+    setSpeechMode(mode);
+    saveSpeechMode(mode);
+    if (mode === "off") stopSpeaking();
+  }, []);
 
   // Timers tick down server-side, so the queue has to be re-read rather than
   // counted down locally — a stop job that already fired should stop showing
@@ -122,8 +141,10 @@ export function ChatScreen({
   }, [language, justConnected, t]);
 
   const handleSend = useCallback(
-    async (text: string) => {
+    async (text: string, viaVoice?: boolean) => {
       setError(null);
+      // Asking something new retires the previous answer, spoken one included.
+      stopSpeaking();
       setItems((prev) => [...prev, { kind: "message", id: id(), role: "user", text }]);
       setPending(true);
       try {
@@ -153,6 +174,13 @@ export function ChatScreen({
           }),
           { kind: "message", id: id(), role: "assistant", text: res.reply },
         ]);
+        // Only the final reply is spoken — never the tool trace, and never a
+        // pending confirmation as if it were the outcome. The model is already
+        // told to say that something is waiting in the app (see
+        // actions.propose), so that sentence is what gets read out.
+        if (speechMode === "always" || (speechMode === "voice" && viaVoice)) {
+          speak(res.reply, language);
+        }
         refreshVehicle();
         // A turn may have created or cancelled a timer — reflect it at once
         // instead of leaving the drawer stale until the next poll.
@@ -170,7 +198,7 @@ export function ChatScreen({
         setPending(false);
       }
     },
-    [history, refreshVehicle, refreshScheduled, language, t, onLocked]
+    [history, refreshVehicle, refreshScheduled, language, t, onLocked, speechMode]
   );
 
   useEffect(() => {
@@ -180,7 +208,13 @@ export function ChatScreen({
   }, [items, pending]);
 
   if (showSettings) {
-    return <SettingsScreen onClose={() => setShowSettings(false)} />;
+    return (
+      <SettingsScreen
+        onClose={() => setShowSettings(false)}
+        speechMode={speechMode}
+        onSpeechModeChange={changeSpeechMode}
+      />
+    );
   }
 
   const activeActions = scheduled.filter(
@@ -246,6 +280,7 @@ export function ChatScreen({
         }}
         onLock={() => {
           setMenuOpen(false);
+          stopSpeaking();
           lock().finally(() => onLocked?.());
         }}
       />
