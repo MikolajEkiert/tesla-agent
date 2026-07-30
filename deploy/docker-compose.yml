@@ -21,6 +21,13 @@ services:
       # mount it's in the container's writable layer and every redeploy
       # (which recreates the container) wipes it, forcing Tesla re-login.
       - ../backend/data:/app/data
+      # The signing proxy's self-signed certificate, so the api can pin to it
+      # instead of disabling TLS verification on the channel that carries the
+      # Tesla bearer token (see fleet.py PROXY_CA).
+      - ./certs/proxy-cert.pem:/certs/proxy-cert.pem:ro
+    networks:
+      - default
+      - signing
 
   frontend:
     build:
@@ -55,18 +62,35 @@ services:
     # accepts connections from inside its own container — the api container
     # (a separate network namespace) got a bare "connection refused" for
     # every signed command (lock, climate, seat heaters, media, charging).
-    # Safe to open up here: this port is only `expose`d (not
-    # `ports`-published), so it's still unreachable from outside the compose
-    # network / the internet — only sibling containers can reach it.
+    # The port is only `expose`d, never `ports`-published, so it stays
+    # unreachable from the internet.
+    #
+    # It is still reachable by every sibling container, and it holds the
+    # virtual key that signs vehicle commands — so it sits on its own network
+    # shared solely with the api service (below). The static frontend and
+    # Caddy have no business talking to it.
+    #
+    # -verbose dropped on purpose: this process terminates OAuth bearer tokens
+    # and signed command payloads, and verbose logging put them in
+    # `docker compose logs`.
     command: >
       -tls-key /certs/proxy-key.pem -cert /certs/proxy-cert.pem
-      -key-file /keys/private-key.pem -host 0.0.0.0 -port 4443 -verbose
+      -key-file /keys/private-key.pem -host 0.0.0.0 -port 4443
     volumes:
       - ./keys:/keys:ro
       - ./certs:/certs:ro
     expose:
       - "4443"
+    networks:
+      - signing
     restart: unless-stopped
+
+networks:
+  # Default bridge keeps caddy <-> api <-> frontend talking; `signing` is
+  # joined only by api and tesla-proxy, so nothing else on the compose network
+  # can ask for a command to be signed with the vehicle key.
+  default:
+  signing:
 
 volumes:
   caddy_data:

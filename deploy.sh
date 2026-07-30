@@ -11,6 +11,14 @@ KEY=$2
 
 echo "🚀 Deploying to $IP..."
 
+echo "🔎 Checking every backend route has a Caddy entry..."
+# Caddy's catch-all hands unlisted paths to the static frontend, so a missing
+# route ships as an nginx 404 that looks like a broken app. Cheap to check,
+# twice already shipped without it.
+PYBIN=backend/.venv/bin/python
+[ -x "$PYBIN" ] || PYBIN=python3
+"$PYBIN" deploy/check-routes.py || { echo "Aborting deploy — add the missing handle blocks first."; exit 1; }
+
 echo "🏗️  Building the PWA (deploy/Dockerfile.web ships the pre-built dist/,
      it doesn't build it on the server)..."
 # --clear: Metro's bundler cache can serve a stale build across runs with
@@ -20,22 +28,30 @@ echo "🏗️  Building the PWA (deploy/Dockerfile.web ships the pre-built dist/
 ( cd mobile && npx expo export -p web --clear ) || { echo "PWA build failed — aborting deploy."; exit 1; }
 
 echo "📦 Copying files to server..."
-rsync -avz -e "ssh -i $KEY -o StrictHostKeyChecking=accept-new" \
+rsync -avz -e "ssh -i \"$KEY\" -o StrictHostKeyChecking=accept-new" \
     --exclude 'mobile/node_modules' \
     --exclude '.git' \
     --exclude 'mobile/.expo' \
     --exclude 'backend/.venv' \
     --exclude '__pycache__' \
     --exclude 'backend/data' \
-    ./ ubuntu@$IP:~/tesla-agent/
+    ./ "ubuntu@$IP:~/tesla-agent/"
 
 echo "🐳 Installing Docker on server and starting the app (this might take a minute)..."
-ssh -i $KEY -o StrictHostKeyChecking=accept-new ubuntu@$IP << 'EOF'
+ssh -i "$KEY" -o StrictHostKeyChecking=accept-new "ubuntu@$IP" << 'EOF'
 if ! command -v docker &> /dev/null; then
     curl -fsSL https://get.docker.com -o get-docker.sh
     sudo sh get-docker.sh
     sudo usermod -aG docker ubuntu
 fi
+
+# The api container runs as uid 10001 (see backend/Dockerfile) and this bind
+# mount holds the Tesla token, passkey and scheduler databases. Ownership has
+# to match, or the container cannot write them and the symptom is a silent
+# forced re-login rather than a visible failure.
+mkdir -p ~/tesla-agent/backend/data
+sudo chown -R 10001:10001 ~/tesla-agent/backend/data
+sudo chmod 700 ~/tesla-agent/backend/data
 
 cd ~/tesla-agent/deploy
 sudo docker compose up -d --build
