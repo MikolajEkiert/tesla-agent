@@ -37,6 +37,11 @@ CONFIRM_REQUIRED = {
     "trigger_homelink",
     "control_windows",
     "set_sentry_mode",
+    # Not a physical risk like the rest, but the least reversible thing here:
+    # once an install starts the car is out of use until it finishes and there
+    # is no calling it back. Cancelling is gated too — the same card serves
+    # both, and a mistaken cancel costs nothing.
+    "software_update",
 }
 
 # A proposal is worthless to an attacker after a moment, and expiring them

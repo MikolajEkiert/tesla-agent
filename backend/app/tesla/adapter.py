@@ -108,6 +108,45 @@ class TeslaAdapter(ABC):
     async def trigger_homelink(self) -> dict[str, Any]:
         """Garage door etc. at the car's current position."""
 
+    # --- charging detail ---
+    @abstractmethod
+    async def set_charging_amps(self, amps: int) -> dict[str, Any]:
+        """Current draw while charging. The lever that matters on a weak
+        domestic circuit, where the car's default would trip a breaker."""
+
+    @abstractmethod
+    async def set_scheduled_departure(
+        self, enable: bool, minutes_after_midnight: int, precondition: bool
+    ) -> dict[str, Any]:
+        """Be charged and warm by a time, letting the car work out when to
+        start — as opposed to set_scheduled_charging, which says when to
+        begin and leaves the arithmetic to you."""
+
+    # --- comfort ---
+    @abstractmethod
+    async def set_steering_wheel_heater(self, on: bool) -> dict[str, Any]:
+        """Cars without the hardware reject this; the error is relayed rather
+        than guessed at here, since trim levels vary."""
+
+    # --- software ---
+    @abstractmethod
+    async def schedule_software_update(self, delay_seconds: int) -> dict[str, Any]:
+        """Start an installation. Confirmation-gated: an update leaves the car
+        unusable for a stretch and cannot be called back once running."""
+
+    @abstractmethod
+    async def cancel_software_update(self) -> dict[str, Any]:
+        """Only works before the install actually begins."""
+
+    # --- media ---
+    @abstractmethod
+    async def set_volume(self, level: float) -> dict[str, Any]:
+        """Absolute level, where media_control only steps up and down."""
+
+    @abstractmethod
+    async def media_favorite(self, direction: str) -> dict[str, Any]:
+        """direction in {next, previous} — moves through saved stations."""
+
 
 def build_adapter() -> TeslaAdapter:
     """Factory: pick the implementation from config. Import lazily so the mock

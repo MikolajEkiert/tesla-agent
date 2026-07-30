@@ -72,6 +72,47 @@ const META: Record<string, ToolMeta> = {
     dot: color.charge,
     describe: () => "stopped",
   },
+  set_charging_amps: {
+    system: "CHARGE",
+    dot: color.charge,
+    describe: (i) => `${i.amps} A`,
+  },
+  set_scheduled_departure: {
+    system: "CHARGE",
+    dot: color.charge,
+    describe: (i) =>
+      i.enable
+        ? `departure ${String(i.hour ?? 0).padStart(2, "0")}:${String(i.minute ?? 0).padStart(2, "0")}` +
+          (i.precondition === false ? "" : " + preheat")
+        : "departure off",
+  },
+  set_steering_wheel_heater: {
+    system: "CLIMATE",
+    dot: color.climate,
+    describe: (i) => (i.on ? "wheel heat on" : "wheel heat off"),
+  },
+  set_volume: {
+    system: "MEDIA",
+    dot: color.brand,
+    describe: (i) => `volume ${i.level}`,
+  },
+  media_favorite: {
+    system: "MEDIA",
+    dot: color.brand,
+    describe: (i) => `favourite ${i.direction}`,
+  },
+  software_update: {
+    // Its own system rather than SECURITY: it is the one command that takes
+    // the car out of use, and the log line should not read like a door lock.
+    system: "UPDATE",
+    dot: color.security,
+    describe: (i) =>
+      i.action === "cancel"
+        ? "cancelled"
+        : i.delay_minutes
+        ? `install in ${i.delay_minutes} min`
+        : "install now",
+  },
   get_vehicle_state: {
     system: "STATE",
     dot: color.textTertiary,

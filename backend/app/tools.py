@@ -14,10 +14,16 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_vehicle_state",
         "description": (
-            "Read the car's current state: battery %, charge limit, whether it's "
-            "charging, locked/unlocked, climate on/off, inside and target "
-            "temperature, seat heaters, media. Prefer this before answering "
-            "questions about the car. Cheap and safe."
+            "Read the car's current state: battery %, range in km (rated, and "
+            "an estimate from recent driving), charge limit, whether it's "
+            "charging and at what power, minutes left to the charge limit, "
+            "locked/unlocked, climate on/off, inside/outside and target "
+            "temperature, seat heaters, odometer, any door or window left "
+            "open, and a pending software update. Prefer this before "
+            "answering questions about the car. Cheap and safe. "
+            "Fields the car did not report are absent rather than zero — if a "
+            "key is missing, say you don't have it instead of reading the gap "
+            "as a value."
         ),
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
@@ -326,6 +332,107 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "set_charging_amps",
+        "description": (
+            "Set how many amps the car draws while charging. Lower it when a "
+            "domestic circuit can't sustain the default, raise it to charge "
+            "faster. Has no effect at a Supercharger, which negotiates its "
+            "own rate. Read get_vehicle_state first if the user asks what it "
+            "is now."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"amps": {"type": "integer"}},
+            "required": ["amps"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "set_scheduled_departure",
+        "description": (
+            "Have the car ready to leave at a given time: it decides when to "
+            "start charging, and optionally warms or cools the cabin to meet "
+            "it. Different from set_scheduled_charging, which sets when "
+            "charging begins rather than when you leave. Use this when the "
+            "user talks about when they are leaving; use the other when they "
+            "talk about when charging should start."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "enable": {"type": "boolean"},
+                "hour": {"type": "integer"},
+                "minute": {"type": "integer"},
+                "precondition": {
+                    "type": "boolean",
+                    "description": "Also bring the cabin to temperature for that time.",
+                },
+            },
+            "required": ["enable"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "set_steering_wheel_heater",
+        "description": (
+            "Turn the heated steering wheel on or off. Not every car has the "
+            "hardware — if this one doesn't, the car rejects it and you should "
+            "say so plainly rather than claiming success."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"on": {"type": "boolean"}},
+            "required": ["on"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "set_volume",
+        "description": (
+            "Set the media volume to an absolute level, 0 to 11. Use "
+            "media_control for relative up/down steps."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"level": {"type": "number"}},
+            "required": ["level"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "media_favorite",
+        "description": "Move to the next or previous saved favourite station.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"direction": {"type": "string", "enum": ["next", "previous"]}},
+            "required": ["direction"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "software_update",
+        "description": (
+            "Start or cancel installation of a software update the car has "
+            "already downloaded. Check get_vehicle_state first — if it reports "
+            "no pending update there is nothing to install, and saying so "
+            "beats sending the command. Installing needs confirmation: it "
+            "takes the car out of use for a while and cannot be stopped once "
+            "under way."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["install", "cancel"]},
+                "delay_minutes": {
+                    "type": "integer",
+                    "description": "Wait before starting. 0 means as soon as possible.",
+                },
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -339,6 +446,16 @@ NUMERIC_BOUNDS = {
     "set_seat_heater": {"level": (0, 3)},
     "schedule_climate": {"celsius": (15, 28), "run_for_minutes": (1, 30)},
     "set_scheduled_charging": {"hour": (0, 23), "minute": (0, 59)},
+    "set_scheduled_departure": {"hour": (0, 23), "minute": (0, 59)},
+    # 5 A is the lowest the car accepts; 48 covers every domestic and wall
+    # connector this car can be wired to. The car clamps to its own maximum
+    # anyway, but sending nonsense wastes a wake-up to be told so.
+    "set_charging_amps": {"amps": (5, 48)},
+    "set_volume": {"level": (0, 11)},
+    # A day's grace at most. Anything longer is better expressed by simply
+    # asking again later, and an update parked a week out is one nobody
+    # remembers agreeing to.
+    "software_update": {"delay_minutes": (0, 1440)},
 }
 
 
@@ -411,6 +528,20 @@ async def dispatch_unguarded(
         ),
         "set_climate_keeper_mode": lambda: adapter.set_climate_keeper_mode(args["mode"]),
         "set_navigation_destination": lambda: adapter.set_navigation_destination(args["address"]),
+        "set_charging_amps": lambda: adapter.set_charging_amps(int(args["amps"])),
+        "set_scheduled_departure": lambda: adapter.set_scheduled_departure(
+            args["enable"],
+            int(args.get("hour", 0)) * 60 + int(args.get("minute", 0)),
+            bool(args.get("precondition", True)),
+        ),
+        "set_steering_wheel_heater": lambda: adapter.set_steering_wheel_heater(args["on"]),
+        "set_volume": lambda: adapter.set_volume(float(args["level"])),
+        "media_favorite": lambda: adapter.media_favorite(args["direction"]),
+        "software_update": lambda: (
+            adapter.schedule_software_update(int(args.get("delay_minutes", 0)) * 60)
+            if args.get("action") == "install"
+            else adapter.cancel_software_update()
+        ),
         # App-level actions (scheduler-backed), not a single call to the car.
         "schedule_climate": lambda: actions.schedule_climate(
             adapter,

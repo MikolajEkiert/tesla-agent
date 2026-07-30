@@ -70,6 +70,13 @@ def _raise_for_status(r: httpx.Response, source: str) -> None:
 
 MILES_TO_KM = 1.609344
 
+
+def _put(target: dict[str, Any], key: str, value: Any) -> None:
+    """Set only when there is something to set. Keeps "we don't know" and
+    "the value is zero/false" distinguishable in the state the model reads."""
+    if value is not None:
+        target[key] = value
+
 # The signing proxy presents a self-signed certificate; pin to it so the
 # channel carrying the Tesla bearer token is authenticated rather than blindly
 # trusted. Falls back to no verification only if the file is absent, which
@@ -217,10 +224,27 @@ class FleetImpl:
         return data
 
     def _normalize(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Pick the fields worth answering questions with.
+
+        This used to stop at nine, and the omission showed: asked for range
+        the assistant answered "I don't have that", which read as a limit of
+        Tesla's API and was nothing of the sort — `battery_range` had been
+        arriving in the same response all along and was being dropped here.
+        Everything below already comes in that one call, so exposing it costs
+        no extra request and no extra permission; the anti-confabulation rule
+        in llm/prompt.py then has real data to work with instead of a gap it
+        must decline to fill.
+
+        Absent keys are left out rather than defaulted. A missing field and a
+        field that is genuinely zero mean different things — "range unknown"
+        is not "0 km left" — and the model is told to say what it does not
+        have, which it can only do if the difference survives to here.
+        """
         charge_state = data.get("charge_state", {})
         climate_state = data.get("climate_state", {})
         vehicle_state = data.get("vehicle_state", {})
-        return {
+
+        state: dict[str, Any] = {
             "awake": True,
             "battery_percent": charge_state.get("battery_level", 0),
             "charge_limit_percent": charge_state.get("charge_limit_soc", 80),
@@ -235,6 +259,72 @@ class FleetImpl:
             },
             "media": {"playing": False, "volume": 5},  # not reliably exposed by vehicle_data
         }
+
+        def km(field: str) -> float | None:
+            """Tesla reports distance in miles regardless of the car's display
+            units, so every one of these needs converting rather than
+            relaying."""
+            miles = charge_state.get(field)
+            return round(miles * MILES_TO_KM, 1) if isinstance(miles, (int, float)) else None
+
+        # Two different answers to "how far can I go", and the difference
+        # matters enough to send both: `battery_range` is the rated figure the
+        # dash shows, `est_battery_range` is Tesla's own estimate from how this
+        # car has actually been driven lately — the honest one in winter.
+        _put(state, "range_km", km("battery_range"))
+        _put(state, "range_estimated_km", km("est_battery_range"))
+
+        _put(state, "outside_temp_c", climate_state.get("outside_temp"))
+        _put(state, "charge_port_open", charge_state.get("charge_port_door_open"))
+        _put(state, "plugged_in", charge_state.get("conn_charge_cable") not in (None, "<invalid>"))
+
+        # Only meaningful mid-charge. Tesla leaves them at 0 when idle, which
+        # would otherwise read as "fully charged, zero minutes to go".
+        if state["charging"]:
+            _put(state, "charging_power_kw", charge_state.get("charger_power"))
+            _put(state, "charging_amps", charge_state.get("charge_amps"))
+            _put(state, "charging_volts", charge_state.get("charger_voltage"))
+            minutes = charge_state.get("minutes_to_full_charge")
+            if not minutes:
+                hours = charge_state.get("time_to_full_charge")
+                minutes = round(hours * 60) if isinstance(hours, (int, float)) else None
+            _put(state, "minutes_to_charge_limit", minutes or None)
+            rate = charge_state.get("charge_rate")
+            if isinstance(rate, (int, float)) and rate:
+                _put(state, "charging_km_per_hour", round(rate * MILES_TO_KM, 1))
+
+        odometer = vehicle_state.get("odometer")
+        if isinstance(odometer, (int, float)):
+            state["odometer_km"] = round(odometer * MILES_TO_KM)
+
+        # Anything open is worth mentioning unprompted before a drive; all
+        # closed is the normal case and not worth the words, so only the
+        # exceptions travel.
+        openings = {
+            "driver_door": vehicle_state.get("df"),
+            "passenger_door": vehicle_state.get("pf"),
+            "rear_left_door": vehicle_state.get("dr"),
+            "rear_right_door": vehicle_state.get("pr"),
+            "frunk": vehicle_state.get("ft"),
+            "trunk": vehicle_state.get("rt"),
+            "driver_window": vehicle_state.get("fd_window"),
+            "passenger_window": vehicle_state.get("fp_window"),
+            "rear_left_window": vehicle_state.get("rd_window"),
+            "rear_right_window": vehicle_state.get("rp_window"),
+        }
+        open_now = [name for name, value in openings.items() if value]
+        if open_now:
+            state["open"] = open_now
+
+        update = vehicle_state.get("software_update") or {}
+        if update.get("status"):
+            state["software_update"] = {
+                "status": update.get("status"),
+                "version": update.get("version"),
+            }
+        _put(state, "software_version", vehicle_state.get("car_version"))
+
+        return state
 
     def _remember(self, normalized: dict[str, Any]) -> None:
         now = time.monotonic()
@@ -560,6 +650,47 @@ class FleetImpl:
         # paired for that spot, so they must be the car's own position.
         lat, lon = await self._coordinates()
         return await self._command("trigger_homelink", {"lat": lat, "lon": lon})
+
+    async def set_charging_amps(self, amps: int) -> dict[str, Any]:
+        return await self._command("set_charging_amps", {"charging_amps": amps})
+
+    async def set_scheduled_departure(
+        self, enable: bool, minutes_after_midnight: int, precondition: bool
+    ) -> dict[str, Any]:
+        # Off-peak fields are sent explicitly rather than omitted: Tesla treats
+        # this payload as the whole setting, so leaving them out re-enables
+        # whatever the car had configured before.
+        return await self._command(
+            "set_scheduled_departure",
+            {
+                "enable": enable,
+                "departure_time": minutes_after_midnight,
+                "preconditioning_enabled": precondition,
+                "preconditioning_weekdays_only": False,
+                "off_peak_charging_enabled": False,
+                "off_peak_charging_weekdays_only": False,
+                "end_off_peak_time": 0,
+            },
+        )
+
+    async def set_steering_wheel_heater(self, on: bool) -> dict[str, Any]:
+        return await self._command("remote_steering_wheel_heater_request", {"on": on})
+
+    async def schedule_software_update(self, delay_seconds: int) -> dict[str, Any]:
+        return await self._command(
+            "schedule_software_update", {"offset_sec": delay_seconds}
+        )
+
+    async def cancel_software_update(self) -> dict[str, Any]:
+        return await self._command("cancel_software_update")
+
+    async def set_volume(self, level: float) -> dict[str, Any]:
+        return await self._command("adjust_volume", {"volume": level})
+
+    async def media_favorite(self, direction: str) -> dict[str, Any]:
+        return await self._command(
+            "media_next_fav" if direction == "next" else "media_prev_fav"
+        )
 
     # --- navigation (unsigned — the proxy itself refuses this command) ---
     async def set_navigation_destination(self, address: str) -> dict[str, Any]:

@@ -20,6 +20,16 @@ class MockImpl:
             "target_temp_c": 21.0,
             "seat_heaters": {"front_left": 0, "front_right": 0},
             "media": {"playing": False, "volume": 5},
+            # Mirrors what _normalize now sends from a real car, so the
+            # assistant can be developed against questions about range and
+            # charging without one.
+            "range_km": 340.5,
+            "range_estimated_km": 312.0,
+            "outside_temp_c": 4.0,
+            "odometer_km": 41230,
+            "plugged_in": False,
+            "charge_port_open": False,
+            "software_version": "2026.14.3 mock",
         }
 
     async def get_state(self) -> dict[str, Any]:
@@ -154,3 +164,34 @@ class MockImpl:
 
     async def trigger_homelink(self) -> dict[str, Any]:
         return {"ok": True, "homelink": "triggered"}
+
+    async def set_charging_amps(self, amps: int) -> dict[str, Any]:
+        self._state["charging_amps"] = amps
+        return {"ok": True, "charging_amps": amps}
+
+    async def set_scheduled_departure(
+        self, enable: bool, minutes_after_midnight: int, precondition: bool
+    ) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "scheduled_departure": enable,
+            "departure_minutes_after_midnight": minutes_after_midnight,
+            "precondition": precondition,
+        }
+
+    async def set_steering_wheel_heater(self, on: bool) -> dict[str, Any]:
+        self._state["steering_wheel_heater"] = on
+        return {"ok": True, "steering_wheel_heater": on}
+
+    async def schedule_software_update(self, delay_seconds: int) -> dict[str, Any]:
+        return {"ok": True, "update_starts_in_seconds": delay_seconds}
+
+    async def cancel_software_update(self) -> dict[str, Any]:
+        return {"ok": True, "update": "cancelled"}
+
+    async def set_volume(self, level: float) -> dict[str, Any]:
+        self._state["media"]["volume"] = level
+        return {"ok": True, "volume": level}
+
+    async def media_favorite(self, direction: str) -> dict[str, Any]:
+        return {"ok": True, "favorite": direction}
