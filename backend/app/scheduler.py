@@ -60,6 +60,10 @@ async def init_db() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs (status, run_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_jobs_group ON jobs (group_id)")
         await db.commit()
+    try:
+        os.chmod(DB_PATH, 0o600)
+    except OSError:
+        pass
 
 
 def new_group_id() -> str:
@@ -111,6 +115,8 @@ def _group_state(rows: list[dict[str, Any]], meta: dict[str, Any]) -> str:
     the user gets real errors rather than a hollow "scheduled").
     """
     statuses = [r["status"] for r in rows]
+    if any(s == "running" for s in statuses):
+        return "running"          # a row mid-flight, claimed by the runner
     if any(s == "cancelled" for s in statuses):
         return "cancelled"
     if any(s == "failed" for s in statuses):
@@ -141,7 +147,7 @@ async def list_groups(include_finished: bool = True) -> list[dict[str, Any]]:
         state = _group_state(members, meta)
         if not include_finished and state in ("done", "failed", "cancelled"):
             continue
-        pending = [m for m in members if m["status"] == "pending"]
+        pending = [m for m in members if m["status"] == "pending"]  # claimable/cancellable
         errors = [m["error"] for m in members if m["error"]]
         out.append(
             {
@@ -178,6 +184,19 @@ async def cancel_group(group_id: str) -> bool:
 
 
 async def _claim_due_jobs() -> list[dict[str, Any]]:
+    """Take ownership of due jobs in the same transaction that selects them.
+
+    Selecting without claiming left a window where a cancel could land between
+    the read and the execution: cancel_group flipped the row to 'cancelled' and
+    reported success to the user, the runner executed the job anyway, and
+    _finish_job then overwrote the row with 'done'. The user saw "cancelled"
+    while the car did the thing — for a queued climate start, exactly the
+    outcome the cancel was meant to prevent.
+
+    Marking them 'running' first means cancel_group (which only touches
+    'pending' rows) can no longer claim a job that is already in flight, so its
+    return value tells the truth.
+    """
     now = time.time()
     async with _write_lock:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -186,7 +205,14 @@ async def _claim_due_jobs() -> list[dict[str, Any]]:
                 "SELECT * FROM jobs WHERE status = 'pending' AND run_at <= ? ORDER BY run_at ASC",
                 (now,),
             ) as cursor:
-                return [dict(r) for r in await cursor.fetchall()]
+                rows = [dict(r) for r in await cursor.fetchall()]
+            if rows:
+                await db.executemany(
+                    "UPDATE jobs SET status = 'running' WHERE id = ? AND status = 'pending'",
+                    [(r["id"],) for r in rows],
+                )
+                await db.commit()
+            return rows
 
 
 async def _finish_job(job_id: int, status: str, error: str | None = None) -> None:
@@ -203,7 +229,8 @@ async def _defer_job(job_id: int, attempts: int, error: str) -> None:
     async with _write_lock:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
-                "UPDATE jobs SET attempts = ?, run_at = ?, error = ? WHERE id = ?",
+                "UPDATE jobs SET attempts = ?, run_at = ?, error = ?, status = 'pending' "
+                "WHERE id = ?",
                 (attempts, time.time() + RETRY_BACKOFF_S, error, job_id),
             )
             await db.commit()

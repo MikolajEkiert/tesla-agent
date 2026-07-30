@@ -19,8 +19,23 @@ SCOPES = "openid offline_access user_data vehicle_device_data vehicle_location v
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "tesla_tokens.db")
 
-# In-memory store for pending PKCE auth flows (state -> verifier)
-pending_auths: dict[str, str] = {}
+# Pending PKCE flows: state -> (verifier, issued_at). The timestamp matters —
+# without it an unused state stayed valid for the process's whole life, and the
+# dict grew without bound for anyone able to hit /auth/login (now behind the
+# session gate, which is what keeps this from being reachable by strangers).
+pending_auths: dict[str, tuple[str, float]] = {}
+AUTH_STATE_TTL_S = 600
+MAX_PENDING_AUTHS = 8
+
+
+def _prune_pending_auths() -> None:
+    now = time.time()
+    for state, (_, issued) in list(pending_auths.items()):
+        if now - issued > AUTH_STATE_TTL_S:
+            del pending_auths[state]
+    while len(pending_auths) > MAX_PENDING_AUTHS:
+        oldest = min(pending_auths, key=lambda k: pending_auths[k][1])
+        del pending_auths[oldest]
 
 
 async def init_db() -> None:
@@ -37,6 +52,20 @@ async def init_db() -> None:
             """
         )
         await db.commit()
+    # This file holds the Tesla refresh token in cleartext. That token drives
+    # the car through Tesla's own API, bypassing this app's gate, passcode,
+    # passkey and rate limits entirely — so it is strictly more sensitive than
+    # the session secret. SQLite creates it with the process umask (measured
+    # 0644 on the server), hence the explicit tightening.
+    _restrict(DB_PATH)
+
+
+def _restrict(path: str) -> None:
+    """Owner-only, best effort: a failure here must not stop the app starting."""
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 async def has_tokens() -> bool:
@@ -64,7 +93,8 @@ def get_authorize_url() -> tuple[str, str]:
     ).rstrip(b"=").decode("utf-8")
     state = secrets.token_urlsafe(32)
 
-    pending_auths[state] = code_verifier
+    _prune_pending_auths()
+    pending_auths[state] = (code_verifier, time.time())
 
     params = {
         "client_id": settings.tesla_client_id,
@@ -80,8 +110,12 @@ def get_authorize_url() -> tuple[str, str]:
 
 
 async def exchange_code(code: str, state: str) -> None:
-    verifier = pending_auths.pop(state, None)
-    if not verifier:
+    _prune_pending_auths()
+    entry = pending_auths.pop(state, None)
+    if not entry:
+        raise ValueError("Invalid or expired state.")
+    verifier, issued = entry
+    if time.time() - issued > AUTH_STATE_TTL_S:
         raise ValueError("Invalid or expired state.")
 
     settings = get_settings()
