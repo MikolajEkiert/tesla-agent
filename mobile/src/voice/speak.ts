@@ -1,19 +1,29 @@
 /**
- * Spoken replies, using the voice already built into the phone.
+ * Spoken replies, in two voices with one falling back to the other.
  *
- * Free, offline, and — measured on the target device, an installed PWA on
- * iOS — it keeps speaking when the ringer switch is set to silent. That last
- * point decided the design: had the switch muted it, this would have needed an
- * audio element and a synthesised-speech round trip to the server, since a
- * phone kept permanently on silent would otherwise have a mute assistant in
- * the car. It does not, so the browser's own synthesiser is enough.
+ * The phone's built-in Polish voice is the only one iOS offers and it sounds
+ * its age, so the preferred path fetches audio from the server, where a speech
+ * model reads the reply and takes direction on *how* to read it. The built-in
+ * synthesiser stays as the fallback.
  *
- * The same measurement is why "always" is not the default. A synthesiser that
+ * That fallback is not decoration. The free tier limits requests per minute
+ * — measured, not assumed — so a few questions in quick succession will have
+ * one come back empty-handed, and the car is the worst place for an assistant
+ * to answer with silence. Anything that goes wrong with the cloud voice, from
+ * a rate limit to no signal at all, quietly becomes the old voice.
+ *
+ * Both paths were measured on the target device, an installed PWA on iOS 18:
+ * `speechSynthesis` and an `<audio>` element both keep playing with the ringer
+ * switch set to silent. Web Audio does not, which is why the cloud audio plays
+ * through an element and never through an AudioContext.
+ *
+ * That same measurement is why "always" is not the default. A voice that
  * ignores the silent switch will happily talk out loud in a meeting, so the
  * default only speaks when the question was itself asked out loud.
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
+import { fetchSpeech } from "../api";
 import type { Language } from "../i18n";
 
 export type SpeechMode = "off" | "voice" | "always";
@@ -22,6 +32,46 @@ export type SpeechMode = "off" | "voice" | "always";
 export const DEFAULT_SPEECH_MODE: SpeechMode = "voice";
 
 const STORAGE_KEY = "amp.speech";
+const VOICE_KEY = "amp.voice";
+
+/**
+ * Which voice reads the replies: a named voice from the server, or the one
+ * built into the phone.
+ *
+ * "device" is kept as an explicit choice rather than only a fallback, because
+ * it is the offline one. On a drive with no signal it is the only one that
+ * works, and someone who spends time there may reasonably want it always.
+ */
+export type VoiceChoice = "device" | string;
+
+export const DEFAULT_VOICE: VoiceChoice = "Charon";
+
+export async function loadVoiceChoice(): Promise<VoiceChoice> {
+  try {
+    const stored = await AsyncStorage.getItem(VOICE_KEY);
+    if (stored) return stored;
+  } catch {
+    // storage unavailable — the default is a fine answer
+  }
+  return DEFAULT_VOICE;
+}
+
+export async function saveVoiceChoice(voice: VoiceChoice): Promise<void> {
+  try {
+    await AsyncStorage.setItem(VOICE_KEY, voice);
+  } catch {
+    // best-effort persistence only
+  }
+}
+
+// Read once at startup and kept here so speak() stays synchronous for its
+// callers: the reply is already on screen by then, and awaiting storage before
+// making a sound would show a stop button with nothing yet to stop.
+let voiceChoice: VoiceChoice = DEFAULT_VOICE;
+
+export function setActiveVoice(voice: VoiceChoice): void {
+  voiceChoice = voice;
+}
 
 /** Replies are meant to be a sentence or two (see the system prompt). This is
  *  a backstop so an unusually long one does not monologue at you in traffic. */
@@ -109,16 +159,59 @@ export function currentVoiceName(language: Language): string | null {
 let primed = false;
 
 /**
+ * One element for the whole session, not one per reply.
+ *
+ * iOS grants permission to play to the *element* that a gesture touched, so a
+ * freshly created one would be blocked exactly when it matters — seconds after
+ * the tap, when the answer comes back.
+ */
+let player: HTMLAudioElement | null = null;
+let playerUrl: string | null = null;
+
+/** The shortest legal WAV: a 44-byte header describing no samples at all.
+ *  Enough for iOS to consider the element played, inaudible by construction. */
+const SILENT_WAV =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
+
+/**
  * Must be called from a real tap.
  *
- * iOS wants the first utterance of a session to originate in a user gesture,
- * and a reply arrives seconds after the tap that asked for it — long past the
- * point where the browser still counts it. Speaking one silent utterance while
- * the finger is still down opens the door for the real ones later.
+ * iOS wants the first sound of a session to originate in a user gesture, and a
+ * reply arrives seconds after the tap that asked for it — long past the point
+ * where the browser still counts it. Both paths are opened here while the
+ * finger is still down: one silent utterance for the synthesiser, one silent
+ * file for the element.
  */
 export function primeSpeech(): void {
-  if (primed || !speechSupported()) return;
+  if (primed || Platform.OS !== "web" || typeof window === "undefined") return;
   primed = true;
+
+  try {
+    // Tells iOS this element carries playback rather than a notification
+    // bleep, which is what earns the right to be heard with the ringer switch
+    // silent. Measured as "auto" on iOS 18.7, meaning Safari was deciding for
+    // us; saying it outright turns a behaviour we observed into one we asked
+    // for. Absent on every other browser, hence the guard.
+    const session = (navigator as any).audioSession;
+    if (session) session.type = "playback";
+  } catch {
+    // An unwritable property must not cost us the rest of the priming.
+  }
+
+  try {
+    player = new Audio(SILENT_WAV);
+    // Without this iOS refuses to load anything until the element is played,
+    // which is the very thing we are trying to get ahead of.
+    player.preload = "auto";
+    void player.play().catch(() => {
+      // Blocked priming only means the first reply may fall back to the
+      // built-in voice, which is a working assistant either way.
+    });
+  } catch {
+    player = null;
+  }
+
+  if (!speechSupported()) return;
   try {
     const utterance = new SpeechSynthesisUtterance(" ");
     utterance.volume = 0;
@@ -137,16 +230,120 @@ export interface SpeechHandlers {
   onEnd?: () => void;
 }
 
-/** Ground truth, for callers that cannot rely on the end event arriving. */
+/** In flight: the audio for the current reply is still being made. */
+let pending: AbortController | null = null;
+
+/**
+ * Bumped by every request to speak and by every stop.
+ *
+ * Audio that arrives after its reply stopped being the current one must not
+ * play. That happens for real: a question asked while the previous answer is
+ * still being synthesised, or the stop button pressed during the round trip.
+ * A late arrival compares its own number and drops itself.
+ */
+let generation = 0;
+
+/**
+ * Ground truth, for callers that cannot rely on the end event arriving.
+ *
+ * Counts a request still in flight as speaking. Otherwise the stop control
+ * would vanish during the second or two between asking for audio and hearing
+ * it — the one stretch where the user has the least idea what is happening and
+ * most wants a way out.
+ */
 export function isSpeaking(): boolean {
+  if (Platform.OS !== "web" || typeof window === "undefined") return false;
+  if (pending) return true;
+  if (player && !player.paused && !player.ended) return true;
   if (!speechSupported()) return false;
   return window.speechSynthesis.speaking || window.speechSynthesis.pending;
 }
 
+function releaseUrl(): void {
+  if (!playerUrl) return;
+  URL.revokeObjectURL(playerUrl);
+  playerUrl = null;
+}
+
 export function speak(text: string, language: Language, handlers?: SpeechHandlers): void {
-  if (!speechSupported()) return;
   const spoken = text.trim().slice(0, MAX_SPOKEN_CHARS);
   if (!spoken) return;
+
+  // Whatever is speaking now belongs to an older reply. Two answers talking
+  // over each other is worse than either.
+  stopSpeaking();
+  const mine = ++generation;
+
+  // No element means priming never ran or was refused, and an unprimed element
+  // on iOS will not play — so the built-in voice is not merely the fallback
+  // here, it is the only one that can make a sound.
+  if (voiceChoice === "device" || !player) {
+    speakWithDevice(spoken, language, handlers);
+    return;
+  }
+
+  const controller = new AbortController();
+  pending = controller;
+  fetchSpeech(spoken, language, voiceChoice, controller.signal)
+    .then((blob) => {
+      if (mine !== generation) return;
+      pending = null;
+      playFile(blob, spoken, language, mine, handlers);
+    })
+    .catch(() => {
+      if (mine !== generation) return;
+      pending = null;
+      // Rate limit, no signal, a 503 — the response to all of them is the
+      // same, and it is not an error message. Say the words in the other
+      // voice; the user hears a slightly worse assistant, not a broken one.
+      speakWithDevice(spoken, language, handlers);
+    });
+}
+
+function playFile(
+  blob: Blob,
+  spoken: string,
+  language: Language,
+  mine: number,
+  handlers?: SpeechHandlers
+): void {
+  if (!player) {
+    speakWithDevice(spoken, language, handlers);
+    return;
+  }
+  try {
+    releaseUrl();
+    playerUrl = URL.createObjectURL(blob);
+    player.src = playerUrl;
+
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      handlers?.onEnd?.();
+    };
+    player.onended = finish;
+    // An element that fails mid-file has already said part of the sentence.
+    // Starting the whole reply again in the other voice would repeat it, so a
+    // failure here just ends: the text is on screen regardless.
+    player.onerror = finish;
+
+    void player.play().catch(() => {
+      if (mine !== generation) return;
+      // Refused before a single sample was heard — nothing was said yet, so
+      // the fallback can say all of it.
+      speakWithDevice(spoken, language, handlers);
+    });
+  } catch {
+    speakWithDevice(spoken, language, handlers);
+  }
+}
+
+function speakWithDevice(spoken: string, language: Language, handlers?: SpeechHandlers): void {
+  if (!speechSupported()) {
+    handlers?.onEnd?.();
+    return;
+  }
   try {
     // Cancel first: two replies talking over each other is worse than either.
     window.speechSynthesis.cancel();
@@ -176,6 +373,31 @@ export function speak(text: string, language: Language, handlers?: SpeechHandler
 }
 
 export function stopSpeaking(): void {
+  if (Platform.OS !== "web" || typeof window === "undefined") return;
+
+  // Bumping first is what makes the stop reliable: audio already on its way
+  // back from the server cannot be recalled, only disowned.
+  generation += 1;
+
+  if (pending) {
+    pending.abort();
+    pending = null;
+  }
+
+  try {
+    if (player) {
+      player.pause();
+      // Rewind before dropping the source, or a later play() resumes the old
+      // sentence from where this one was cut off.
+      player.currentTime = 0;
+      player.onended = null;
+      player.onerror = null;
+      releaseUrl();
+    }
+  } catch {
+    // nothing to stop
+  }
+
   if (!speechSupported()) return;
   try {
     window.speechSynthesis.cancel();

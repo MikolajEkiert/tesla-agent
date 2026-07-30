@@ -13,6 +13,7 @@ import {
   BackendError,
   deletePasskey,
   fetchPasskeys,
+  fetchVoices,
   passkeysSupported,
   registerPasskey,
   type Passkey,
@@ -20,7 +21,15 @@ import {
 import { useLanguage } from "../LanguageContext";
 import type { Language, TranslationKey } from "../i18n";
 import { color, font, radius, space } from "../theme";
-import { currentVoiceName, speechSupported, type SpeechMode } from "../voice/speak";
+import {
+  currentVoiceName,
+  primeSpeech,
+  setActiveVoice,
+  speak,
+  speechSupported,
+  type SpeechMode,
+  type VoiceChoice,
+} from "../voice/speak";
 
 const LANGUAGES: { code: Language; labelKey: "langEnglish" | "langPolish" }[] = [
   { code: "en", labelKey: "langEnglish" },
@@ -37,12 +46,39 @@ export function SettingsScreen({
   onClose,
   speechMode,
   onSpeechModeChange,
+  voiceChoice,
+  onVoiceChange,
 }: {
   onClose: () => void;
   speechMode: SpeechMode;
   onSpeechModeChange: (mode: SpeechMode) => void;
+  voiceChoice: VoiceChoice;
+  onVoiceChange: (voice: VoiceChoice) => void;
 }) {
   const { language, setLanguage, t } = useLanguage();
+  // Served by the backend rather than listed here, so the names the app offers
+  // and the names the synthesiser accepts cannot drift apart. An empty list
+  // (old backend, no signal) leaves just the phone voice, which still works.
+  const [voices, setVoices] = useState<string[]>([]);
+  useEffect(() => {
+    fetchVoices()
+      .then((v) => setVoices(v.voices))
+      .catch(() => setVoices([]));
+  }, []);
+
+  /**
+   * Choosing and hearing are one action.
+   *
+   * "Iapetus" and "Umbriel" tell you nothing, so a picker that only selected
+   * would be a list of riddles. Speaking on tap also primes the audio element
+   * on the tap itself, which is exactly the gesture iOS wants.
+   */
+  const previewVoice = (option: VoiceChoice) => {
+    primeSpeech();
+    onVoiceChange(option);
+    setActiveVoice(option);
+    speak(t("speechVoiceSample"), language);
+  };
   // Safari fills the voice list asynchronously, so this can be null on the
   // first render and correct a moment later.
   const [voiceName, setVoiceName] = useState<string | null>(null);
@@ -140,16 +176,44 @@ export function SettingsScreen({
             <Text style={styles.hint}>{t("speechHint")}</Text>
             {speechMode !== "off" && (
               <>
-                {voiceName && (
-                  <Text style={styles.voiceName}>
-                    {t("speechVoiceLabel", { name: voiceName })}
-                  </Text>
+                <Text style={[styles.label, styles.sectionGap]}>
+                  {t("speechVoiceSection")}
+                </Text>
+                <View style={styles.voiceGrid}>
+                  {["device", ...voices].map((option) => {
+                    const active = option === voiceChoice;
+                    return (
+                      <Pressable
+                        key={option}
+                        onPress={() => previewVoice(option)}
+                        style={[styles.voiceChip, active && styles.voiceChipActive]}
+                      >
+                        <Text
+                          style={[styles.voiceChipText, active && styles.voiceChipTextActive]}
+                        >
+                          {option === "device" ? t("speechVoiceDevice") : option}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Text style={styles.hint}>{t("speechVoiceHint")}</Text>
+                {voiceChoice === "device" && (
+                  <>
+                    {voiceName && (
+                      <Text style={styles.voiceName}>
+                        {t("speechVoiceLabel", { name: voiceName })}
+                      </Text>
+                    )}
+                    {/* The stock Polish voice is the compact one and sounds
+                        like it. The better version is a free download in iOS
+                        Settings, and Amp switches to it by itself — so the
+                        only thing missing is knowing it exists. Shown only
+                        for the phone voice: it is advice about a voice you
+                        are not otherwise using. */}
+                    <Text style={styles.hint}>{t("speechVoiceUpgrade")}</Text>
+                  </>
                 )}
-                {/* The stock Polish voice is the compact one and sounds like
-                    it. The better version is a free download in iOS Settings,
-                    and Amp switches to it by itself — so the only thing
-                    missing is knowing it exists. */}
-                <Text style={styles.hint}>{t("speechVoiceUpgrade")}</Text>
               </>
             )}
           </>
@@ -267,6 +331,30 @@ const styles = StyleSheet.create({
   },
   sectionGap: {
     marginTop: space.xl,
+  },
+  // Wraps rather than scrolls: the list is short and fixed, and a row that
+  // scrolls sideways hides options from someone glancing at it in a car.
+  voiceGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: space.sm,
+  },
+  voiceChip: {
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+    borderRadius: radius.sm,
+    backgroundColor: color.surfaceRaised,
+  },
+  voiceChipActive: {
+    backgroundColor: color.brand,
+  },
+  voiceChipText: {
+    fontSize: 14,
+    color: color.textSecondary,
+  },
+  voiceChipTextActive: {
+    color: color.bg,
+    fontFamily: font.bodySemiBold,
   },
   voiceName: {
     fontFamily: font.mono,

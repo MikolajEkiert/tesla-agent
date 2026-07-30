@@ -30,12 +30,17 @@ import { SettingsScreen } from "./SettingsScreen";
 import { color, font, space } from "../theme";
 import {
   DEFAULT_SPEECH_MODE,
+  DEFAULT_VOICE,
   isSpeaking,
   loadSpeechMode,
+  loadVoiceChoice,
   saveSpeechMode,
+  saveVoiceChoice,
+  setActiveVoice,
   speak,
   stopSpeaking,
   type SpeechMode,
+  type VoiceChoice,
 } from "../voice/speak";
 import type { ChatItem, ScheduledAction, VehicleState } from "../types";
 
@@ -68,6 +73,7 @@ export function ChatScreen({
     },
   ]);
   const [speechMode, setSpeechMode] = useState<SpeechMode>(DEFAULT_SPEECH_MODE);
+  const [voiceChoice, setVoiceChoice] = useState<VoiceChoice>(DEFAULT_VOICE);
   const [speaking, setSpeaking] = useState(false);
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
   const [vehicle, setVehicle] = useState<VehicleState | null>(null);
@@ -97,6 +103,12 @@ export function ChatScreen({
     refreshVehicle();
     refreshScheduled();
     loadSpeechMode().then(setSpeechMode);
+    // Told to the speech module as well as held in state: speak() is called
+    // from an event handler and cannot wait on storage at that point.
+    loadVoiceChoice().then((choice) => {
+      setVoiceChoice(choice);
+      setActiveVoice(choice);
+    });
     // Leaving the screen mid-sentence should not leave a voice talking to an
     // empty room — the synthesiser outlives the component otherwise.
     return stopSpeaking;
@@ -127,6 +139,12 @@ export function ChatScreen({
       clearInterval(poll);
     };
   }, [speaking]);
+
+  const changeVoice = useCallback((choice: VoiceChoice) => {
+    setVoiceChoice(choice);
+    setActiveVoice(choice);
+    saveVoiceChoice(choice);
+  }, []);
 
   const changeSpeechMode = useCallback(
     (mode: SpeechMode) => {
@@ -249,6 +267,8 @@ export function ChatScreen({
         onClose={() => setShowSettings(false)}
         speechMode={speechMode}
         onSpeechModeChange={changeSpeechMode}
+        voiceChoice={voiceChoice}
+        onVoiceChange={changeVoice}
       />
     );
   }

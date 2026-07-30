@@ -91,6 +91,12 @@ const STRINGS = {
     speechVoiceLabel: "Voice: {name}",
     speechVoiceUpgrade:
       "For a much better voice, download the enhanced Polish one: Settings → Accessibility → Spoken Content → Voices → Polish. It's free, and Amp picks it up on its own.",
+    speechVoiceSection: "Voice",
+    speechVoiceDevice: "Phone",
+    speechVoiceHint:
+      "Tap a voice to hear it. The phone's own voice needs no signal, so Amp falls back to it whenever the better one can't be reached.",
+    speechVoiceSample:
+      "The car has sixty-three percent battery, two hundred and ten kilometres of range. Nearest Supercharger is four kilometres away.",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -177,6 +183,12 @@ const STRINGS = {
     speechVoiceLabel: "Głos: {name}",
     speechVoiceUpgrade:
       "Po znacznie lepszy głos: Ustawienia → Dostępność → Treść mówiona → Głosy → Polski i pobierz wersję rozszerzoną. Jest darmowa, a Amp sam ją wybierze.",
+    speechVoiceSection: "Głos",
+    speechVoiceDevice: "Telefon",
+    speechVoiceHint:
+      "Dotknij głosu, żeby go usłyszeć. Głos telefonu nie potrzebuje zasięgu, więc Amp wraca do niego zawsze, gdy lepszy jest nieosiągalny.",
+    speechVoiceSample:
+      "Auto ma sześćdziesiąt trzy procent baterii, zasięg dwieście dziesięć kilometrów. Najbliższy Supercharger jest cztery kilometry stąd.",
   },
 } as const;
 

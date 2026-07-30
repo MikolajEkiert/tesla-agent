@@ -152,6 +152,37 @@ export async function transcribe(audio: Blob, language?: string): Promise<string
   return (await res.json()).text ?? "";
 }
 
+/**
+ * The reply, spoken by the server's voice.
+ *
+ * Takes an AbortSignal because the reply this belongs to can stop being wanted
+ * while the audio is still being made: the stop button, or a second question
+ * asked before the first answer finished arriving. Without it the old audio
+ * would start playing over the new one.
+ */
+export async function fetchSpeech(
+  text: string,
+  language: string,
+  voice: string,
+  signal?: AbortSignal
+): Promise<Blob> {
+  const res = await fetch(`${DEFAULT_BASE_URL}/voice/speak`, {
+    ...CREDENTIALS,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text, language, voice }),
+    signal,
+  });
+  await guard(res);
+  return res.blob();
+}
+
+export async function fetchVoices(): Promise<{ voices: string[]; default: string }> {
+  const res = await fetch(`${DEFAULT_BASE_URL}/voice/voices`, CREDENTIALS);
+  await guard(res);
+  return res.json();
+}
+
 export async function fetchVehicleState(): Promise<VehicleState> {
   const res = await fetch(`${DEFAULT_BASE_URL}/vehicle/state`, CREDENTIALS);
   await guard(res);
