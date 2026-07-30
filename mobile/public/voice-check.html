@@ -60,6 +60,7 @@
         border-radius: 12px;
         padding: 4px 14px;
         margin-bottom: 16px;
+        min-height: 12px;
       }
       h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: var(--dim); margin: 16px 0 4px; }
       button {
@@ -83,6 +84,8 @@
         border: 1px solid var(--line);
         border-radius: 10px;
         padding: 12px;
+        user-select: all;
+        -webkit-user-select: all;
       }
       audio { width: 100%; margin-top: 8px; }
     </style>
@@ -119,59 +122,57 @@
     <script>
       const results = {};
 
-      function add(sectionId, key, value, verdict) {
-        results[key] = value;
-        const row = document.createElement("div");
-        row.className = "row";
-        row.innerHTML =
-          '<span class="k"></span><span class="v ' + (verdict || "") + '"></span>';
-        row.children[0].textContent = key;
-        row.children[1].textContent = value;
-        document.getElementById(sectionId).appendChild(row);
-        render();
-      }
-
       function render() {
         document.getElementById("out").textContent = JSON.stringify(results, null, 1);
       }
 
-      // --- 1. environment ----------------------------------------------------
-      // `standalone` is the whole reason this page exists: several media APIs
-      // behave differently once the page runs from the home screen instead of
-      // a Safari tab, and that is the mode the app actually ships in.
-      const standalone =
-        window.navigator.standalone === true ||
-        window.matchMedia("(display-mode: standalone)").matches;
-
-      document.getElementById("ctx").textContent = standalone
-        ? "Tryb: zainstalowana PWA ✓ (to jest właściwy kontekst)"
-        : "Tryb: karta przeglądarki — otwórz tę stronę z ikony na ekranie głównym!";
-
-      add("env", "standalone", String(standalone), standalone ? "ok" : "bad");
-      add("env", "secureContext", String(window.isSecureContext),
-          window.isSecureContext ? "ok" : "bad");
-      add("env", "userAgent", navigator.userAgent.slice(0, 90));
-
-      // --- 2. microphone -----------------------------------------------------
-      const hasGUM = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-      add("mic", "getUserMedia", String(hasGUM), hasGUM ? "ok" : "bad");
-
-      const AC = window.AudioContext || window.webkitAudioContext;
-      add("mic", "AudioContext", String(!!AC), AC ? "ok" : "bad");
-      add("mic", "AudioWorklet",
-          String(!!(AC && AC.prototype && AC.prototype.audioWorklet !== undefined) ||
-                 !!(AC && new AC().audioWorklet)));
-
-      // Which container iOS would hand us if we used MediaRecorder instead of
-      // encoding WAV ourselves. Recorded for the write-up; the app does not
-      // depend on the answer.
-      if (window.MediaRecorder) {
-        const types = ["audio/wav", "audio/webm", "audio/webm;codecs=opus", "audio/mp4", "audio/aac"];
-        const supported = types.filter((t) => MediaRecorder.isTypeSupported(t));
-        add("mic", "MediaRecorder", supported.join(", ") || "brak", supported.length ? "" : "warn");
-      } else {
-        add("mic", "MediaRecorder", "brak", "warn");
+      function add(sectionId, key, value, verdict) {
+        results[key] = value;
+        const row = document.createElement("div");
+        row.className = "row";
+        row.innerHTML = '<span class="k"></span><span class="v"></span>';
+        row.children[0].textContent = key;
+        row.children[1].textContent = value;
+        if (verdict) row.children[1].classList.add(verdict);
+        document.getElementById(sectionId).appendChild(row);
+        render();
       }
+
+      /**
+       * Every probe runs inside this.
+       *
+       * The first version of this page was one straight run of checks, and one
+       * of them threw: reading `AudioContext.prototype.audioWorklet` raises
+       * "Illegal invocation", because it is a getter that needs a real
+       * instance. Everything after that line never executed — including the
+       * code attaching the button handlers — so the page rendered fine and did
+       * nothing at all, copy button included.
+       *
+       * A diagnostic that dies silently on its first surprise is worse than no
+       * diagnostic: it reports a blank where it should report a problem. Now a
+       * failing probe records its own exception as the finding, and the rest of
+       * the page carries on. Handlers are wired before any probe runs, so no
+       * future check can disable the buttons either.
+       */
+      function safe(sectionId, key, fn, verdictFor) {
+        let value;
+        try {
+          value = fn();
+        } catch (e) {
+          add(sectionId, key, "BŁĄD: " + ((e && e.message) || String(e)), "bad");
+          return;
+        }
+        add(sectionId, key, String(value), verdictFor ? verdictFor(value) : "");
+      }
+
+      const yesNo = (v) => (v ? "ok" : "bad");
+
+      // Feature lookups only — reading these properties cannot throw, so they
+      // are safe at top level. Anything that *calls* into the APIs belongs in a
+      // probe or a handler.
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const synth = window.speechSynthesis;
 
       // Minimal WAV writer — 16-bit PCM mono, the one format we can be certain
       // both iOS produces correctly and the transcriber accepts.
@@ -198,6 +199,8 @@
         return new Blob([buffer], { type: "audio/wav" });
       }
 
+      // --- handlers, wired first ---------------------------------------------
+
       document.getElementById("rec").onclick = async function () {
         const btn = this;
         btn.disabled = true;
@@ -213,9 +216,9 @@
           // resamples rather than trusting it.
           let ctx;
           try { ctx = new AC({ sampleRate: 16000 }); } catch (e) { ctx = new AC(); }
-          add("mic", "requestedRate", "16000");
-          add("mic", "actualRate", String(ctx.sampleRate),
-              ctx.sampleRate === 16000 ? "ok" : "warn");
+          if (ctx.state === "suspended") await ctx.resume();
+          add("mic", "actualRate", String(ctx.sampleRate), ctx.sampleRate === 16000 ? "ok" : "warn");
+          add("mic", "audioWorklet", String(!!ctx.audioWorklet), ctx.audioWorklet ? "ok" : "warn");
 
           const source = ctx.createMediaStreamSource(stream);
           const node = ctx.createScriptProcessor(4096, 1, 1);
@@ -229,12 +232,10 @@
           source.connect(node);
           node.connect(ctx.destination);
 
-          btn.textContent = "Mów teraz… 4";
-          for (let i = 3; i >= 1; i--) {
-            await new Promise((r) => setTimeout(r, 1000));
+          for (let i = 4; i >= 1; i--) {
             btn.textContent = "Mów teraz… " + i;
+            await new Promise((r) => setTimeout(r, 1000));
           }
-          await new Promise((r) => setTimeout(r, 1000));
 
           node.disconnect();
           source.disconnect();
@@ -250,33 +251,28 @@
           let peak = 0;
           for (let i = 0; i < flat.length; i++) peak = Math.max(peak, Math.abs(flat[i]));
           add("mic", "samples", String(total), total > 0 ? "ok" : "bad");
-          add("mic", "peakLevel", peak.toFixed(3),
-              peak > 0.01 ? "ok" : "bad");
+          add("mic", "peakLevel", peak.toFixed(3), peak > 0.01 ? "ok" : "bad");
 
           const blob = encodeWav(flat, ctx.sampleRate);
           add("mic", "wavBytes", String(blob.size));
           const audio = document.createElement("audio");
           audio.controls = true;
           audio.src = URL.createObjectURL(blob);
-          document.getElementById("playback").innerHTML = "";
-          document.getElementById("playback").appendChild(audio);
+          const slot = document.getElementById("playback");
+          slot.innerHTML = "";
+          slot.appendChild(audio);
+          ctx.close();
           btn.textContent = "Nagraj ponownie";
         } catch (e) {
-          add("mic", "error", String(e && e.name ? e.name + ": " + e.message : e), "bad");
+          add("mic", "recordError", (e && e.name ? e.name + ": " + e.message : String(e)), "bad");
           btn.textContent = "Nie udało się — spróbuj ponownie";
         }
         btn.disabled = false;
       };
 
-      // --- 3. speech recognition --------------------------------------------
-      // If this works in standalone mode, transcription is free and on-device.
-      // If it does not, audio has to travel to the backend instead.
-      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      add("asr", "SpeechRecognition", String(!!SR), SR ? "ok" : "warn");
-
       document.getElementById("listen").onclick = function () {
         const btn = this;
-        if (!SR) { add("asr", "result", "API niedostępne", "bad"); return; }
+        if (!SR) { add("asr", "listenResult", "API niedostępne", "bad"); return; }
         btn.disabled = true;
         btn.textContent = "Słucham…";
         let got = false;
@@ -289,51 +285,39 @@
             got = true;
             add("asr", "transcript", e.results[0][0].transcript, "ok");
           };
-          r.onerror = (e) => add("asr", "error", String(e.error), "bad");
+          r.onerror = (e) => add("asr", "listenError", String(e.error), "bad");
           r.onend = () => {
-            if (!got) add("asr", "result", "cisza / brak wyniku", "warn");
+            if (!got) add("asr", "listenResult", "cisza / brak wyniku", "warn");
             btn.disabled = false;
             btn.textContent = "Spróbuj ponownie";
           };
           r.start();
           setTimeout(() => { try { r.stop(); } catch (e) {} }, 5000);
         } catch (e) {
-          add("asr", "error", String(e), "bad");
+          add("asr", "listenError", String((e && e.message) || e), "bad");
           btn.disabled = false;
+          btn.textContent = "Spróbuj ponownie";
         }
       };
 
-      // --- 4. speech synthesis ----------------------------------------------
-      const synth = window.speechSynthesis;
-      add("tts", "speechSynthesis", String(!!synth), synth ? "ok" : "bad");
-
-      function listVoices() {
-        if (!synth) return;
-        const all = synth.getVoices();
-        const pl = all.filter((v) => v.lang && v.lang.toLowerCase().startsWith("pl"));
-        add("tts", "voicesTotal", String(all.length));
-        add("tts", "voicesPolish",
-            pl.map((v) => v.name + " (" + v.lang + ")").join(", ") || "brak",
-            pl.length ? "ok" : "bad");
-      }
-      // Safari populates the voice list asynchronously; asking too early
-      // returns an empty array and looks like "no Polish voice".
-      if (synth) {
-        if (synth.getVoices().length) listVoices();
-        else synth.addEventListener("voiceschanged", listVoices, { once: true });
-      }
-
       document.getElementById("speak").onclick = function () {
-        if (!synth) return;
-        const u = new SpeechSynthesisUtterance(
-          "Auto ma sześćdziesiąt trzy procent baterii i jest zamknięte."
-        );
-        u.lang = "pl-PL";
-        const pl = synth.getVoices().find((v) => v.lang && v.lang.toLowerCase().startsWith("pl"));
-        if (pl) u.voice = pl;
-        u.onstart = () => add("tts", "spoke", "start", "ok");
-        u.onerror = (e) => add("tts", "speakError", String(e.error), "bad");
-        synth.speak(u);
+        if (!synth) { add("tts", "speakError", "API niedostępne", "bad"); return; }
+        try {
+          const u = new SpeechSynthesisUtterance(
+            "Auto ma sześćdziesiąt trzy procent baterii i jest zamknięte."
+          );
+          u.lang = "pl-PL";
+          const pl = (synth.getVoices() || []).find(
+            (v) => v.lang && v.lang.toLowerCase().indexOf("pl") === 0
+          );
+          if (pl) u.voice = pl;
+          u.onstart = () => add("tts", "spoke", "start", "ok");
+          u.onend = () => add("tts", "spokeEnd", "ok", "ok");
+          u.onerror = (e) => add("tts", "speakError", String(e.error), "bad");
+          synth.speak(u);
+        } catch (e) {
+          add("tts", "speakError", String((e && e.message) || e), "bad");
+        }
       };
 
       document.getElementById("copy").onclick = async function () {
@@ -342,9 +326,67 @@
           await navigator.clipboard.writeText(text);
           this.textContent = "Skopiowano ✓";
         } catch (e) {
-          this.textContent = "Zaznacz tekst wyżej ręcznie";
+          // Clipboard access is refused in plenty of contexts. Selecting the
+          // block is the reliable fallback, so do it for them.
+          const pre = document.getElementById("out");
+          const range = document.createRange();
+          range.selectNodeContents(pre);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          this.textContent = "Zaznaczone — skopiuj ręcznie";
         }
       };
+
+      // --- probes, run after everything is wired -----------------------------
+
+      // `standalone` is the whole reason this page exists: several media APIs
+      // behave differently once the page runs from the home screen instead of
+      // a Safari tab, and that is the mode the app actually ships in.
+      const standalone =
+        window.navigator.standalone === true ||
+        window.matchMedia("(display-mode: standalone)").matches;
+
+      document.getElementById("ctx").textContent = standalone
+        ? "Tryb: zainstalowana PWA ✓ (to jest właściwy kontekst)"
+        : "Tryb: karta przeglądarki — otwórz tę stronę z ikony na ekranie głównym!";
+
+      safe("env", "standalone", () => standalone, yesNo);
+      safe("env", "secureContext", () => window.isSecureContext, yesNo);
+      safe("env", "userAgent", () => navigator.userAgent.slice(0, 90));
+
+      safe("mic", "getUserMedia", () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia), yesNo);
+      safe("mic", "AudioContext", () => !!AC, yesNo);
+      // Which container iOS would hand us if we used MediaRecorder instead of
+      // encoding WAV ourselves. Recorded for the write-up; the app does not
+      // depend on the answer.
+      safe("mic", "MediaRecorder", () => {
+        if (!window.MediaRecorder) return "brak";
+        const types = ["audio/wav", "audio/webm", "audio/webm;codecs=opus", "audio/mp4", "audio/aac"];
+        return types.filter((t) => MediaRecorder.isTypeSupported(t)).join(", ") || "brak";
+      });
+
+      // If this works in standalone mode, transcription could be free and
+      // on-device. If it does not, audio has to travel to the backend instead.
+      safe("asr", "SpeechRecognition", () => !!SR, (v) => (v ? "ok" : "warn"));
+
+      safe("tts", "speechSynthesis", () => !!synth, yesNo);
+
+      function listVoices() {
+        safe("tts", "voicesTotal", () => synth.getVoices().length);
+        safe("tts", "voicesPolish", () => {
+          const pl = synth
+            .getVoices()
+            .filter((v) => v.lang && v.lang.toLowerCase().indexOf("pl") === 0);
+          return pl.map((v) => v.name + " (" + v.lang + ")").join(", ") || "brak";
+        }, (v) => (v === "brak" ? "bad" : "ok"));
+      }
+      // Safari populates the voice list asynchronously; asking too early
+      // returns an empty array and looks like "no Polish voice".
+      if (synth) {
+        if (synth.getVoices().length) listVoices();
+        else synth.addEventListener("voiceschanged", listVoices, { once: true });
+      }
 
       render();
     </script>
