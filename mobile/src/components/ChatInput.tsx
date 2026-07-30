@@ -9,17 +9,21 @@ import {
 } from "react-native";
 import { useLanguage } from "../LanguageContext";
 import { color, font, radius, space } from "../theme";
+import { VoiceButton } from "./VoiceButton";
 
 export function ChatInput({
   onSend,
   disabled,
+  onLocked,
 }: {
   onSend: (text: string) => void;
   disabled: boolean;
+  onLocked?: () => void;
 }) {
   const { t } = useLanguage();
   const [text, setText] = useState("");
   const [focused, setFocused] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
 
   const canSend = text.trim().length > 0 && !disabled;
 
@@ -31,6 +35,7 @@ export function ChatInput({
 
   return (
     <View style={styles.container}>
+      {voiceStatus && <Text style={styles.voiceStatus}>{voiceStatus}</Text>}
       <View style={[styles.bar, focused && styles.barFocused]}>
         <TextInput
           value={text}
@@ -47,14 +52,26 @@ export function ChatInput({
           textContentType="none"
           importantForAutofill="no"
         />
-        <Pressable
-          onPress={submit}
-          disabled={!canSend}
-          hitSlop={10}
-          style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}
-        >
-          <Text style={styles.sendGlyph}>↑</Text>
-        </Pressable>
+        {/* One button, not two: the microphone is the resting state and turns
+            into send as soon as there is something to send. Two permanent
+            buttons would crowd the bar and make the common action ambiguous. */}
+        {canSend || text.length > 0 ? (
+          <Pressable
+            onPress={submit}
+            disabled={!canSend}
+            hitSlop={10}
+            style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}
+          >
+            <Text style={styles.sendGlyph}>↑</Text>
+          </Pressable>
+        ) : (
+          <VoiceButton
+            onTranscript={onSend}
+            onStatus={setVoiceStatus}
+            onLocked={onLocked}
+            disabled={disabled}
+          />
+        )}
       </View>
     </View>
   );
@@ -80,6 +97,13 @@ const styles = StyleSheet.create({
   },
   barFocused: {
     borderColor: color.brand,
+  },
+  voiceStatus: {
+    fontFamily: font.mono,
+    fontSize: 11,
+    color: color.textTertiary,
+    paddingLeft: space.md,
+    paddingBottom: space.xs,
   },
   input: {
     flex: 1,

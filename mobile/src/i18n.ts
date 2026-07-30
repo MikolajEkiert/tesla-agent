@@ -73,6 +73,13 @@ const STRINGS = {
     confirmWindows: "move the windows",
     confirmSentry: "change Sentry Mode",
     passkeyPasscodePrompt: "Enter your passcode to set up Face ID",
+    voiceHold: "Hold to speak",
+    voiceListening: "Listening…",
+    voiceTranscribing: "Transcribing…",
+    voiceTooShort: "Too short — hold the button while you speak",
+    voiceSilence: "Didn't catch anything",
+    voiceDenied: "Microphone access denied",
+    voiceFailed: "Couldn't transcribe that",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -141,6 +148,13 @@ const STRINGS = {
     confirmWindows: "ruszyć szybami",
     confirmSentry: "zmienić Sentry Mode",
     passkeyPasscodePrompt: "Podaj kod dostępu, aby włączyć Face ID",
+    voiceHold: "Przytrzymaj, aby mówić",
+    voiceListening: "Słucham…",
+    voiceTranscribing: "Rozpoznaję…",
+    voiceTooShort: "Za krótko — przytrzymaj przycisk podczas mówienia",
+    voiceSilence: "Nic nie usłyszałem",
+    voiceDenied: "Brak dostępu do mikrofonu",
+    voiceFailed: "Nie udało się rozpoznać mowy",
   },
 } as const;
 

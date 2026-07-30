@@ -132,6 +132,26 @@ export async function sendMessage(
   return res.json();
 }
 
+/**
+ * Speech to text. The transcript comes back as a plain string and is then sent
+ * through sendMessage like anything typed — voice adds no second path to the
+ * car, which is what keeps the confirmation gate meaningful.
+ *
+ * Posts the recording as the raw body rather than multipart form data: one
+ * blob, one content type, no parser on either end.
+ */
+export async function transcribe(audio: Blob, language?: string): Promise<string> {
+  const query = language ? `?language=${encodeURIComponent(language)}` : "";
+  const res = await fetch(`${DEFAULT_BASE_URL}/voice/transcribe${query}`, {
+    ...CREDENTIALS,
+    method: "POST",
+    headers: { "content-type": audio.type || "audio/wav" },
+    body: audio,
+  });
+  await guard(res);
+  return (await res.json()).text ?? "";
+}
+
 export async function fetchVehicleState(): Promise<VehicleState> {
   const res = await fetch(`${DEFAULT_BASE_URL}/vehicle/state`, CREDENTIALS);
   await guard(res);

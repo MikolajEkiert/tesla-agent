@@ -232,7 +232,7 @@ export function ChatScreen({
             <Text style={styles.errorText}>{error}</Text>
           </View>
         )}
-        <ChatInput onSend={handleSend} disabled={pending} />
+        <ChatInput onSend={handleSend} disabled={pending} onLocked={onLocked} />
       </KeyboardAvoidingView>
 
       <Sidebar
