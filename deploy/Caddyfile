@@ -28,6 +28,16 @@ tesla-amp.duckdns.org {
 	handle /chat* {
 		reverse_proxy api:8000
 	}
+	# Speech to text, and the single-question endpoint an Apple Shortcut calls.
+	# The body cap is enforced here as well as in the app: the API checks the
+	# size only after Starlette has read the request, so without this a large
+	# upload is buffered in a container that has ~1 GB to lose.
+	handle /voice/* {
+		request_body {
+			max_size 2MB
+		}
+		reverse_proxy api:8000
+	}
 	handle /vehicle/* {
 		reverse_proxy api:8000
 	}

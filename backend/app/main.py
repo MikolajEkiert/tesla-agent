@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 
-from app import actions, scheduler
+from app import actions, scheduler, voice
 from app.auth import gate, passkey
 from app.config import get_settings
 from app.llm import build_orchestrator
@@ -322,6 +322,35 @@ async def chat(req: ChatRequest) -> ChatResponse:
         # which is specific enough to act on without leaking secrets.
         raise HTTPException(status_code=502, detail=str(e))
     return ChatResponse(**result)
+
+
+@app.post("/voice/transcribe")
+async def voice_transcribe(request: Request, language: str | None = None) -> dict[str, str]:
+    """Audio in, text out. Nothing else.
+
+    The transcript goes back to the app, which sends it through /chat like any
+    typed message — so voice reuses the whole existing pipeline (tools,
+    confirmation gate, trace, queue) instead of paralleling it. It also means
+    you see what was heard before it acts, in the chat, and can correct it.
+
+    Takes the raw recording as the request body rather than multipart form
+    data: the client posts one blob with one content type, which needs no
+    parser dependency and lets the size be checked before anything is read.
+    """
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > voice.MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="Recording too long")
+
+    audio = await request.body()
+    try:
+        text = await voice.transcribe(
+            audio, request.headers.get("content-type", ""), language
+        )
+    except voice.TranscriptionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"text": text}
 
 
 class ConfirmRequest(BaseModel):
