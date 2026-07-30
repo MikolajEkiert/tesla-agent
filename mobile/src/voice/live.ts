@@ -377,10 +377,15 @@ export class LiveSession {
    * Queue one chunk of the reply.
    *
    * Web Audio, because a stream still arriving cannot be handed to an <audio>
-   * element. That is the known risk on iOS — Web Audio obeyed the ringer
-   * switch when it was measured, where an element did not — which is why the
-   * caller keeps the old Cloud TTS path and why voice-check.html grew a
-   * section asking whether declaring the session as playback lifts it.
+   * element. That was the open risk on iOS: Web Audio obeyed the ringer switch
+   * when it was first measured, where an element did not, which would have
+   * left a streamed voice mute in a car.
+   *
+   * Measured since, on the target phone: declaring the session as playback
+   * lifts it. `audioSession.type` reads back as "playback" and the tone was
+   * audible with the switch silent. Hence the assignment below being made
+   * before the first chunk rather than hopefully somewhere at startup — it is
+   * load-bearing, not decoration.
    */
   private play(pcm: Uint8Array): void {
     if (!this.outputContext) {

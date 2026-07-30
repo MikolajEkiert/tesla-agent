@@ -97,10 +97,14 @@ const LIVE_KEY = "amp.live";
  * Whether a conversation runs over a live audio session or the older
  * record-and-upload path.
  *
- * A setting rather than a silent upgrade, because the live path streams its
- * replies through Web Audio — the one output route measured as obeying the
- * iPhone's ringer switch. If it turns out to be mute on silent in the car,
- * this is the way back, and it needs to be reachable without a deploy.
+ * The reason this started as a setting — that streamed replies go through Web
+ * Audio, which obeyed the ringer switch when first measured — turned out not
+ * to bite: declaring the session as playback lifts the mute, measured on the
+ * phone this runs on.
+ *
+ * It stays a setting anyway. A held-open socket has failure modes a series of
+ * requests does not, and a stretch of bad signal on a drive is a worse place
+ * to discover that than a settings screen is to switch away from it.
  */
 export async function loadLiveMode(): Promise<boolean> {
   try {

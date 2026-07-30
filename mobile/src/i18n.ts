@@ -120,7 +120,7 @@ const STRINGS = {
     liveOn: "Live audio",
     liveOff: "Recordings",
     liveHint:
-      "\"Live audio\" streams the conversation both ways: your words are recognised as you speak them and the reply starts before it's finished being made. It plays through a different audio route than recordings do, so if the assistant goes quiet with the phone on silent, switch back to \"Recordings\" — that route is measured to play regardless.",
+      "\"Live audio\" streams the conversation both ways: your words are recognised as you speak them and the reply starts before it's finished being made. Measured on this phone, it stays audible with the ringer switch on silent. \"Recordings\" is the older path — slower, but it only needs a working request rather than a connection held open, so it's the one to fall back to on a bad signal.",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -236,7 +236,7 @@ const STRINGS = {
     liveOn: "Na żywo",
     liveOff: "Nagrania",
     liveHint:
-      "„Na żywo” przesyła rozmowę strumieniem w obie strony: Twoje słowa są rozpoznawane w trakcie mówienia, a odpowiedź zaczyna płynąć, zanim powstanie w całości. Idzie inną drogą dźwięku niż nagrania, więc jeśli asystent zamilknie przy wyciszonym telefonie, wróć na „Nagrania” — ta droga jest zmierzona i gra niezależnie od przełącznika.",
+      "„Na żywo” przesyła rozmowę strumieniem w obie strony: Twoje słowa są rozpoznawane w trakcie mówienia, a odpowiedź zaczyna płynąć, zanim powstanie w całości. Zmierzone na tym telefonie: słychać ją także przy wyciszonym przełączniku. „Nagrania” to starsza droga — wolniejsza, ale wymaga tylko udanego żądania zamiast trzymanego połączenia, więc to na nią warto wrócić przy słabym zasięgu.",
   },
 } as const;
 
