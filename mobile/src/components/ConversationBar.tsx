@@ -4,7 +4,13 @@ import { useLanguage } from "../LanguageContext";
 import { color, radius, space, type } from "../theme";
 import { IconClose } from "./icons";
 
-export type ConversationPhase = "listening" | "thinking" | "speaking";
+/**
+ * `connecting` is not cosmetic. Opening a live session is a microphone, an
+ * HTTPS round trip for a token, a WebSocket and a setup handshake — up to a
+ * couple of seconds on a phone — and the bar used to say "listening" through
+ * all of it. People answered it, and the first sentence went nowhere.
+ */
+export type ConversationPhase = "connecting" | "listening" | "thinking" | "speaking";
 
 /**
  * Opens a continuous back-and-forth, as opposed to the microphone beside it,
@@ -69,9 +75,10 @@ export function ConversationBar({
   const { t } = useLanguage();
   const think = useRef(new Animated.Value(0.35)).current;
 
-  // Thinking has no level to show, so the dot breathes instead of sitting dead.
+  // Thinking and connecting have no level to show, so the dot breathes instead
+  // of sitting dead.
   useEffect(() => {
-    if (phase !== "thinking") return;
+    if (phase !== "thinking" && phase !== "connecting") return;
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(think, {
@@ -93,7 +100,9 @@ export function ConversationBar({
   }, [phase, think]);
 
   const label =
-    phase === "listening"
+    phase === "connecting"
+      ? t("conversationConnecting")
+      : phase === "listening"
       ? t("conversationListening")
       : phase === "thinking"
       ? t("conversationThinking")
@@ -123,7 +132,7 @@ export function ConversationBar({
               style={[
                 styles.dot,
                 { backgroundColor: tone },
-                phase === "thinking" && { opacity: think },
+                (phase === "thinking" || phase === "connecting") && { opacity: think },
               ]}
             />
           </View>

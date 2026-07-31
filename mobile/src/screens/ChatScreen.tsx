@@ -79,6 +79,7 @@ import {
   voiceInputSupported,
 } from "../voice/recorder";
 import { LiveSession, liveSupported } from "../voice/live";
+import { playReadyCue, primeCue } from "../voice/cue";
 import type { ChatItem, ScheduledAction, VehicleState } from "../types";
 
 /** How long a hush has to hold, once the driver has started talking, before a
@@ -231,7 +232,8 @@ export function ChatScreen({
   // until the driver ends it. See handleConversationTap and startConversation
   // below for the actual loop; these hold the state the bar renders.
   const [conversationActive, setConversationActive] = useState(false);
-  const [conversationPhase, setConversationPhase] = useState<ConversationPhase>("listening");
+  const [conversationPhase, setConversationPhase] = useState<ConversationPhase>("connecting");
+  const conversationPhaseRef = useRef<ConversationPhase>("connecting");
   const [conversationLevel, setConversationLevel] = useState(0);
   const [bargeInEnabled, setBargeInEnabled] = useState(true);
   // Mirrors conversationActive for code that runs outside React's render
@@ -266,6 +268,24 @@ export function ChatScreen({
   const stopConversationRef = useRef<() => void>(() => {});
   const startBargeInWatcherRef = useRef<() => void>(() => {});
   const stopBargeInWatcherRef = useRef<() => void>(() => {});
+
+  /**
+   * Move the conversation to a phase, and sound the cue when it becomes able
+   * to hear.
+   *
+   * Every phase change goes through here so the transition that matters —
+   * connecting to listening — is noticed in one place rather than at each of
+   * the four sites that can cause it. The previous phase is kept in a ref
+   * because this is called from socket callbacks and promise handlers, where
+   * the state of the render that scheduled them is a phase or two behind.
+   */
+  const enterPhase = useCallback((phase: ConversationPhase) => {
+    if (phase === "listening" && conversationPhaseRef.current === "connecting") {
+      playReadyCue();
+    }
+    conversationPhaseRef.current = phase;
+    setConversationPhase(phase);
+  }, []);
 
   /** The meter, at a rate a screen can actually show. */
   const reportLevel = useCallback((value: number) => {
@@ -553,7 +573,7 @@ export function ChatScreen({
       const rowId = id();
       setItems((prev) => [...prev, { kind: "message", id: rowId, role: "user", text }]);
       setPending(true);
-      if (conversationTurn) setConversationPhase("thinking");
+      if (conversationTurn) enterPhase("thinking");
       try {
         const res = await sendMessage(text, history, language);
         const replyId = id();
@@ -633,7 +653,7 @@ export function ChatScreen({
           // one at all. The watchdog below clears it either way.
           setSpeaking(true);
           if (conversationTurn) {
-            setConversationPhase("speaking");
+            enterPhase("speaking");
             startBargeInWatcherRef.current();
           }
           speak(res.reply, language, {
@@ -861,7 +881,11 @@ export function ChatScreen({
     // reopen the microphone for the same moment. Whichever gets here first
     // sets the ref; the second sees it already populated and backs off.
     if (!conversationActiveRef.current || conversationRecorderRef.current) return;
-    setConversationPhase("listening");
+    // Opening a microphone is not instant either — less so than a live session,
+    // but a permission check and an audio graph still sit between the tap and
+    // the first frame that gets kept. Same rule as the live path: do not claim
+    // to be listening until something is.
+    enterPhase("connecting");
     setConversationLevel(0);
     const recorder = new VoiceRecorder();
     recorder.endpointing = {
@@ -872,28 +896,38 @@ export function ChatScreen({
     recorder.onLevel = reportLevel;
     recorder.onAutoStop = () => void finishConversationTurn();
     conversationRecorderRef.current = recorder;
-    recorder.start().catch((e) => {
-      // Permission refused or revoked, or the device took the microphone away
-      // (a phone call arriving). Nothing left to listen with — and this has to
-      // say so.
-      //
-      // It used to fail in silence, which is the whole of the bug where the
-      // conversation button "does nothing": the bar appears for the length of
-      // one failed getUserMedia and is gone again before anyone sees it, and
-      // the driver is left tapping a control that gives no sign it was ever
-      // pressed. A refused microphone is an ordinary thing to hit — it is a
-      // browser permission, it is per-site, and Safari forgets it — so it is
-      // worth a sentence rather than a shrug.
-      conversationRecorderRef.current = null;
-      const denied =
-        e instanceof Error && (e.name === "NotAllowedError" || e.name === "SecurityError");
-      setError(
-        denied
-          ? t("voiceDenied")
-          : t("voiceMicFailed", { reason: (e instanceof Error && e.name) || "?" })
-      );
-      stopConversation();
-    });
+    recorder
+      .start()
+      .then(() => {
+        // Guard against a conversation that ended while the microphone was
+        // opening: without it the bar would announce itself ready just as it
+        // disappears, tone and all.
+        if (conversationActiveRef.current && conversationRecorderRef.current === recorder) {
+          enterPhase("listening");
+        }
+      })
+      .catch((e) => {
+        // Permission refused or revoked, or the device took the microphone away
+        // (a phone call arriving). Nothing left to listen with — and this has
+        // to say so.
+        //
+        // It used to fail in silence, which is the whole of the bug where the
+        // conversation button "does nothing": the bar appears for the length of
+        // one failed getUserMedia and is gone again before anyone sees it, and
+        // the driver is left tapping a control that gives no sign it was ever
+        // pressed. A refused microphone is an ordinary thing to hit — it is a
+        // browser permission, it is per-site, and Safari forgets it — so it is
+        // worth a sentence rather than a shrug.
+        conversationRecorderRef.current = null;
+        const denied =
+          e instanceof Error && (e.name === "NotAllowedError" || e.name === "SecurityError");
+        setError(
+          denied
+            ? t("voiceDenied")
+            : t("voiceMicFailed", { reason: (e instanceof Error && e.name) || "?" })
+        );
+        stopConversation();
+      });
   };
   listenAgainRef.current = listenAgain;
 
@@ -975,7 +1009,7 @@ export function ChatScreen({
   /** Speak a line the assistant produced locally, then carry on listening. */
   const speakThen = (line: string) => {
     setSpeaking(true);
-    setConversationPhase("speaking");
+    enterPhase("speaking");
     startBargeInWatcherRef.current();
     speak(line, language, {
       onEnd: () => {
@@ -990,7 +1024,7 @@ export function ChatScreen({
     const recorder = conversationRecorderRef.current;
     if (!recorder) return;
     conversationRecorderRef.current = null;
-    setConversationPhase("thinking");
+    enterPhase("thinking");
     try {
       const blob = await recorder.stop();
 
@@ -1053,7 +1087,7 @@ export function ChatScreen({
       onLevel: reportLevel,
       onPhase: (phase) => {
         if (!conversationActiveRef.current) return;
-        setConversationPhase(phase);
+        enterPhase(phase);
         setSpeaking(phase === "speaking");
       },
       onUserTranscript: (text, audio) => {
@@ -1177,9 +1211,13 @@ export function ChatScreen({
     // Still inside the tap, which is the only moment iOS lets us unlock
     // speech — every later turn in the loop plays without one.
     primeSpeech();
+    // Armed in the tap, played a second or two later when the session is
+    // actually up — iOS only lets a page unlock playback from a gesture, and
+    // by then this one is long gone.
+    primeCue();
     conversationActiveRef.current = true;
     setConversationActive(true);
-    setConversationPhase("listening");
+    enterPhase("connecting");
     // Try the live session first; listenAgain is the fallback and also the
     // path when live is switched off.
     void startLive().then((live) => {
