@@ -21,6 +21,18 @@ import {
 } from "../api";
 import { useLanguage } from "../LanguageContext";
 import type { Language, TranslationKey } from "../i18n";
+import {
+  BUILT_IN_HINTS,
+  BUILT_IN_LABELS,
+  BUILT_IN_PERSONAS,
+  MAX_CUSTOM_PERSONAS,
+  MAX_NAME_CHARS,
+  MAX_STYLE_CHARS,
+  isBuiltIn,
+  type CustomPersona,
+  type PersonaId,
+} from "../persona";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { color, font, radius, space, type } from "../theme";
 import {
   currentVoiceName,
@@ -60,6 +72,11 @@ export function SettingsScreen({
   onVoiceConfirmChange,
   liveEnabled,
   onLiveChange,
+  persona,
+  onPersonaChange,
+  customPersonas,
+  onCustomPersonaSave,
+  onCustomPersonaDelete,
 }: {
   onClose: () => void;
   speechMode: SpeechMode;
@@ -72,6 +89,14 @@ export function SettingsScreen({
   onVoiceConfirmChange: (enabled: boolean) => void;
   liveEnabled: boolean;
   onLiveChange: (enabled: boolean) => void;
+  persona: PersonaId;
+  onPersonaChange: (persona: PersonaId) => void;
+  customPersonas: CustomPersona[];
+  /** Saves a new manner, or overwrites one when `id` is given. Storage and the
+   *  selection that may follow it are the screen owner's business, not this
+   *  form's — same division as the voice and language settings above. */
+  onCustomPersonaSave: (name: string, style: string, id?: string) => void;
+  onCustomPersonaDelete: (id: string) => void;
 }) {
   const { language, setLanguage, t } = useLanguage();
   // Served by the backend rather than listed here, so the names the app offers
@@ -111,6 +136,40 @@ export function SettingsScreen({
     const timer = setTimeout(() => setVoiceName(currentVoiceName(language)), 400);
     return () => clearTimeout(timer);
   }, [language]);
+  // The manner editor. Null when closed; `{ id: undefined }` while writing a
+  // new one, `{ id }` while rewriting an existing one — so the same form serves
+  // both and the Save button knows which it is doing.
+  const [editing, setEditing] = useState<{ id?: string } | null>(null);
+  const [draftName, setDraftName] = useState("");
+  const [draftStyle, setDraftStyle] = useState("");
+  // Deleting a manner is small but irreversible, and the app draws its own
+  // dialog because Alert.alert does nothing on the web — see ConfirmDialog.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const personaFull = customPersonas.length >= MAX_CUSTOM_PERSONAS;
+
+  const openEditor = (existing?: CustomPersona) => {
+    setEditing({ id: existing?.id });
+    setDraftName(existing?.name ?? "");
+    setDraftStyle(existing?.style ?? "");
+  };
+
+  const closeEditor = () => {
+    setEditing(null);
+    setDraftName("");
+    setDraftStyle("");
+  };
+
+  const saveDraft = () => {
+    // A manner with no description would be a chip that does nothing, so the
+    // style note is what makes it saveable; the name can be filled in from it
+    // if left blank, which is kinder than refusing the whole form over a label.
+    const style = draftStyle.trim();
+    if (!style) return;
+    const name = draftName.trim() || style.slice(0, MAX_NAME_CHARS);
+    onCustomPersonaSave(name, style, editing?.id);
+    closeEditor();
+  };
+
   const [passkeys, setPasskeys] = useState<Passkey[]>([]);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
   const [passkeyError, setPasskeyError] = useState<string | null>(null);
@@ -204,6 +263,155 @@ export function SettingsScreen({
           })}
         </View>
         <Text style={styles.hint}>{t("settingsLanguageHint")}</Text>
+
+        {/* Above the speech settings and outside them on purpose: the manner
+            applies to what is typed as much as to what is spoken, so burying
+            it under "Spoken replies" would make it look like a voice option on
+            a phone that cannot speak at all. */}
+        <Text style={[styles.label, styles.sectionGap]}>{t("personaSection")}</Text>
+        <View style={styles.voiceGrid}>
+          {BUILT_IN_PERSONAS.map((option) => {
+            const active = option === persona;
+            return (
+              <Pressable
+                key={option}
+                onPress={() => onPersonaChange(option)}
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.voiceChip,
+                  active && styles.voiceChipActive,
+                  pressed && !active && styles.pressedSurface,
+                ]}
+              >
+                <Text style={[styles.voiceChipText, active && styles.voiceChipTextActive]}>
+                  {t(BUILT_IN_LABELS[option])}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        {/* What the chosen manner actually does, one line, under the grid it
+            belongs to. A grid of four adjectives is not self-explanatory —
+            "Formal" and "Standard" read as the same thing until you are told
+            how they differ. */}
+        <Text style={styles.personaDescription}>
+          {isBuiltIn(persona)
+            ? t(BUILT_IN_HINTS[persona])
+            : customPersonas.find((p) => p.id === persona)?.style ?? ""}
+        </Text>
+        <Text style={styles.hint}>{t("personaHint")}</Text>
+
+        <Text style={[styles.label, styles.sectionGap]}>
+          {t("personaCustomSection")}
+        </Text>
+        {customPersonas.length > 0 && (
+          <View style={styles.personaList}>
+            {customPersonas.map((custom) => {
+              const active = custom.id === persona;
+              return (
+                <View key={custom.id} style={styles.personaRow}>
+                  <Pressable
+                    onPress={() => onPersonaChange(custom.id)}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [
+                      styles.personaPick,
+                      active && styles.voiceChipActive,
+                      pressed && !active && styles.pressedSurface,
+                    ]}
+                  >
+                    <Text
+                      style={[styles.voiceChipText, active && styles.voiceChipTextActive]}
+                      numberOfLines={1}
+                    >
+                      {custom.name}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => openEditor(custom)}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    style={({ pressed }) => pressed && styles.pressedText}
+                  >
+                    <Text style={styles.personaAction}>{t("personaCustomEdit")}</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => setPendingDelete(custom.id)}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    style={({ pressed }) => pressed && styles.pressedText}
+                  >
+                    <Text style={styles.personaDelete}>{t("personaCustomDelete")}</Text>
+                  </Pressable>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        {editing ? (
+          <View style={styles.personaForm}>
+            <TextInput
+              value={draftName}
+              onChangeText={setDraftName}
+              placeholder={t("personaCustomNamePlaceholder")}
+              placeholderTextColor={color.textTertiary}
+              style={styles.enrolInput}
+              maxLength={MAX_NAME_CHARS}
+              autoCapitalize="sentences"
+            />
+            <TextInput
+              value={draftStyle}
+              onChangeText={setDraftStyle}
+              placeholder={t("personaCustomStylePlaceholder")}
+              placeholderTextColor={color.textTertiary}
+              style={[styles.enrolInput, styles.personaStyleInput]}
+              // Capped where it is typed as well as where it is stored and
+              // again on the server: the one that matters is the server's, but
+              // a limit you meet while writing is not a surprise afterwards.
+              maxLength={MAX_STYLE_CHARS}
+              multiline
+              textAlignVertical="top"
+            />
+            <View style={styles.personaFormRow}>
+              <Pressable
+                onPress={closeEditor}
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.personaSecondaryButton,
+                  pressed && styles.pressedSurface,
+                ]}
+              >
+                <Text style={styles.personaSecondaryText}>{t("personaCustomCancel")}</Text>
+              </Pressable>
+              <Pressable
+                onPress={saveDraft}
+                disabled={draftStyle.trim().length === 0}
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.personaPrimaryButton,
+                  (pressed || draftStyle.trim().length === 0) && styles.passkeyButtonMuted,
+                ]}
+              >
+                <Text style={styles.passkeyButtonText}>{t("personaCustomSave")}</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : (
+          <Pressable
+            onPress={() => openEditor()}
+            disabled={personaFull}
+            accessibilityRole="button"
+            style={({ pressed }) => [
+              styles.personaAddButton,
+              (pressed || personaFull) && styles.pressedSurface,
+            ]}
+          >
+            <Text style={styles.personaAddText}>{t("personaCustomAdd")}</Text>
+          </Pressable>
+        )}
+        <Text style={styles.hint}>
+          {personaFull && !editing ? t("personaCustomFull") : t("personaCustomHint")}
+        </Text>
 
         {speechSupported() && (
           <>
@@ -429,6 +637,18 @@ export function SettingsScreen({
         )}
         {passkeyError && <Text style={styles.passkeyError}>{passkeyError}</Text>}
       </ScrollView>
+
+      <ConfirmDialog
+        visible={pendingDelete !== null}
+        title={t("personaCustomDeleteTitle")}
+        body={t("personaCustomDeleteBody")}
+        confirmLabel={t("personaCustomDelete")}
+        onConfirm={() => {
+          if (pendingDelete) onCustomPersonaDelete(pendingDelete);
+          setPendingDelete(null);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </SafeAreaView>
   );
 }
@@ -544,6 +764,91 @@ const styles = StyleSheet.create({
   voiceChipTextActive: {
     color: color.bg,
     fontFamily: font.bodySemiBold,
+  },
+  // What the selected manner does, in the app's own voice rather than the
+  // machine's — this is prose about a choice, not a reading off an instrument,
+  // so it takes the body face and not the mono one the diagnostics below use.
+  personaDescription: {
+    ...type.body,
+    fontSize: 13,
+    lineHeight: 19,
+    color: color.textSecondary,
+    marginTop: space.md,
+  },
+  personaList: {
+    gap: space.sm,
+    marginBottom: space.md,
+  },
+  // A row rather than a chip: a manner the owner wrote needs "Edit" and
+  // "Delete" beside it, and hanging those off a chip in a wrapping grid puts
+  // them wherever the wrap happens to fall.
+  personaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.md,
+  },
+  personaPick: {
+    flex: 1,
+    paddingVertical: space.md,
+    paddingHorizontal: space.lg,
+    borderRadius: radius.pill,
+    backgroundColor: color.surfaceRaised,
+  },
+  personaAction: {
+    fontFamily: font.bodyMedium,
+    fontSize: 13,
+    color: color.brand,
+  },
+  personaDelete: {
+    fontFamily: font.bodyMedium,
+    fontSize: 13,
+    color: color.alert,
+  },
+  personaForm: {
+    gap: space.sm,
+  },
+  // Room for the two or three sentences a style note actually is, without
+  // becoming a text editor.
+  personaStyleInput: {
+    minHeight: 96,
+  },
+  personaFormRow: {
+    flexDirection: "row",
+    gap: space.sm,
+  },
+  personaPrimaryButton: {
+    flex: 1,
+    paddingVertical: space.lg,
+    borderRadius: radius.lg,
+    backgroundColor: color.brand,
+    alignItems: "center",
+  },
+  personaSecondaryButton: {
+    flex: 1,
+    paddingVertical: space.lg,
+    borderRadius: radius.lg,
+    backgroundColor: color.surfaceRaised,
+    alignItems: "center",
+  },
+  personaSecondaryText: {
+    fontFamily: font.bodySemiBold,
+    fontSize: 15,
+    color: color.textSecondary,
+  },
+  // Outlined rather than filled: adding a manner is an offer, and a second
+  // solid brand-coloured button under the picker would compete with the choice
+  // the owner came here to make.
+  personaAddButton: {
+    paddingVertical: space.lg,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    alignItems: "center",
+  },
+  personaAddText: {
+    fontFamily: font.bodySemiBold,
+    fontSize: 15,
+    color: color.brand,
   },
   // Monospaced like the voice name below it: this is diagnostic text, and it
   // should read as the machine reporting rather than the app apologising. The

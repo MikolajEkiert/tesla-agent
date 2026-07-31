@@ -160,14 +160,43 @@ async function errorDetail(res: Response): Promise<string> {
 export async function sendMessage(
   message: string,
   history: Record<string, unknown>[],
-  language?: string
+  language?: string,
+  /** How the assistant should sound — see src/persona.ts. A built-in id needs
+   *  nothing else; one the owner wrote is only meaningful with its style text,
+   *  which the server holds no copy of. */
+  persona?: string,
+  personaStyle?: string
 ): Promise<ChatResponse> {
   const res = await fetch(`${DEFAULT_BASE_URL}/chat`, {
     ...CREDENTIALS,
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ message, history, language }),
+    body: JSON.stringify({
+      message,
+      history,
+      language,
+      persona,
+      persona_style: personaStyle,
+    }),
   });
+  await guard(res);
+  return res.json();
+}
+
+/**
+ * Which built-in manners the backend honours.
+ *
+ * Fetched for the same reason the voice list is: the ids are shared between
+ * the app's picker and the server's prompt builder, and a hardcoded list here
+ * would eventually offer one the server has forgotten. A failure leaves the
+ * app's own constants in place, which is the list it was built against.
+ */
+export async function fetchPersonas(): Promise<{
+  personas: string[];
+  default: string;
+  max_style_chars: number;
+}> {
+  const res = await fetch(`${DEFAULT_BASE_URL}/personas`, CREDENTIALS);
   await guard(res);
   return res.json();
 }
@@ -238,13 +267,24 @@ export async function fetchLiveToken(
   language?: string,
   /** A model that minted a token and then refused the session — ask for a
    *  different one. Only this side ever sees that happen. */
-  avoid?: string
+  avoid?: string,
+  /** The chosen manner, bound into the session's system instruction at mint
+   *  time. It has to be sent here as well as with a chat message: while a live
+   *  session is open it is the assistant, and /chat is not involved at all. */
+  persona?: string,
+  personaStyle?: string
 ): Promise<LiveToken> {
   const res = await fetch(`${DEFAULT_BASE_URL}/voice/live-token`, {
     ...CREDENTIALS,
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ voice, language, avoid }),
+    body: JSON.stringify({
+      voice,
+      language,
+      avoid,
+      persona,
+      persona_style: personaStyle,
+    }),
   });
   await guard(res);
   return res.json();

@@ -158,6 +158,32 @@ const STRINGS = {
     liveOff: "Recordings",
     liveHint:
       "\"Live audio\" streams the conversation both ways: your words are recognised as you speak them and the reply starts before it's finished being made. It's a separate assistant from the one you type to — same commands, same confirmation cards, but its own memory of what was said, so it won't know about a typed exchange and the other way round. \"Recordings\" is the older path — slower, and it answers in the typed assistant's own thread, but it only needs a working request rather than a connection held open, so it's the one to fall back to on a bad signal.",
+    personaSection: "Manner",
+    personaStandard: "Standard",
+    personaYouth: "Casual",
+    personaVulgar: "No filter",
+    personaElegant: "Formal",
+    personaStandardHint: "Brief and plain. The way Amp has always answered.",
+    personaYouthHint: "Relaxed and slangy, the way you'd talk to a mate.",
+    personaVulgarHint:
+      "Casual, and it swears — at the traffic, not at you. No slurs at anyone, in any manner.",
+    personaElegantHint: "Measured and formal. Full sentences, no slang.",
+    personaHint:
+      "Changes how Amp talks, never what it does. The figures it reads out and the commands that need confirming are the same in every manner.",
+    personaCustomSection: "Your own manners",
+    personaCustomAdd: "New manner",
+    personaCustomNamePlaceholder: "Name, e.g. \"Race engineer\"",
+    personaCustomStylePlaceholder:
+      "How should Amp sound? e.g. \"Clipped radio calls, like a race engineer on the pit wall. Never more than one sentence.\"",
+    personaCustomSave: "Save",
+    personaCustomCancel: "Cancel",
+    personaCustomDelete: "Delete",
+    personaCustomEdit: "Edit",
+    personaCustomHint:
+      "Describe the tone in your own words. It's kept on this device and sent with each message, so a manner made here won't show up on your other ones.",
+    personaCustomFull: "That's as many as Amp keeps. Delete one to add another.",
+    personaCustomDeleteTitle: "Delete this manner?",
+    personaCustomDeleteBody: "It's removed from this device for good.",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -304,6 +330,32 @@ const STRINGS = {
     liveOff: "Nagrania",
     liveHint:
       "„Na żywo” przesyła rozmowę strumieniem w obie strony: Twoje słowa są rozpoznawane w trakcie mówienia, a odpowiedź zaczyna płynąć, zanim powstanie w całości. To osobny asystent od tego, do którego piszesz — te same polecenia i te same karty potwierdzeń, ale własna pamięć rozmowy, więc nie wie, co padło w czacie tekstowym, i odwrotnie. „Nagrania” to starsza droga — wolniejsza i odpowiada w wątku czatu tekstowego, ale wymaga tylko udanego żądania zamiast trzymanego połączenia, więc to na nią warto wrócić przy słabym zasięgu.",
+    personaSection: "Charakter odpowiedzi",
+    personaStandard: "Standardowy",
+    personaYouth: "Młodzieżowy",
+    personaVulgar: "Bez cenzury",
+    personaElegant: "Elegancki",
+    personaStandardHint: "Krótko i rzeczowo. Tak, jak Amp odpowiadał do tej pory.",
+    personaYouthHint: "Na luzie, ze slangiem — jak do kumpla.",
+    personaVulgarHint:
+      "Młodzieżowy, który przeklina — na korki, nie na Ciebie. Bez wyzwisk pod niczyim adresem.",
+    personaElegantHint: "Stonowanie i z dystansem. Pełne zdania, zero slangu.",
+    personaHint:
+      "Zmienia sposób mówienia, nigdy to, co Amp robi. Odczytywane wartości i polecenia wymagające potwierdzenia są takie same w każdym charakterze.",
+    personaCustomSection: "Twoje charaktery",
+    personaCustomAdd: "Nowy charakter",
+    personaCustomNamePlaceholder: "Nazwa, np. „Inżynier wyścigowy”",
+    personaCustomStylePlaceholder:
+      "Jak ma brzmieć Amp? np. „Krótkie meldunki przez radio, jak inżynier na murku serwisowym. Nigdy więcej niż jedno zdanie.”",
+    personaCustomSave: "Zapisz",
+    personaCustomCancel: "Anuluj",
+    personaCustomDelete: "Usuń",
+    personaCustomEdit: "Edytuj",
+    personaCustomHint:
+      "Opisz ton własnymi słowami. Zostaje na tym urządzeniu i jedzie z każdą wiadomością, więc charakter stworzony tutaj nie pojawi się na innych.",
+    personaCustomFull: "Tyle Amp przechowuje. Usuń jeden, żeby dodać kolejny.",
+    personaCustomDeleteTitle: "Usunąć ten charakter?",
+    personaCustomDeleteBody: "Zniknie z tego urządzenia na dobre.",
   },
 } as const;
 

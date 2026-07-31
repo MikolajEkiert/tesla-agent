@@ -32,6 +32,8 @@ class AnthropicOrchestrator:
         user_text: str,
         history: list[Message] | None = None,
         language: str | None = None,
+        persona: str | None = None,
+        persona_style: str | None = None,
     ) -> dict[str, Any]:
         messages: list[Message] = sanitize_history(history)
         messages.append({"role": "user", "content": user_text})
@@ -53,7 +55,7 @@ class AnthropicOrchestrator:
                 # default (do NOT disable it on Opus 5 — with tools it can emit
                 # tool calls as plain text).
                 output_config={"effort": "low"},
-                system=build_system_prompt(language),
+                system=build_system_prompt(language, persona, persona_style),
                 tools=TOOLS,
                 messages=messages,
             )

@@ -30,11 +30,17 @@ class GeminiOrchestrator:
         self.client = genai.Client(api_key=self.settings.gemini_api_key)
         self._tools = [types.Tool(function_declarations=function_declarations())]
 
-    def _config(self, language: str | None) -> types.GenerateContentConfig:
+    def _config(
+        self,
+        language: str | None,
+        persona: str | None = None,
+        persona_style: str | None = None,
+    ) -> types.GenerateContentConfig:
         # Built fresh per request (cheap) since the system instruction
-        # depends on the caller's language setting, not just the adapter.
+        # depends on the caller's language and persona settings, not just the
+        # adapter.
         return types.GenerateContentConfig(
-            system_instruction=build_system_prompt(language),
+            system_instruction=build_system_prompt(language, persona, persona_style),
             tools=self._tools,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
@@ -44,11 +50,13 @@ class GeminiOrchestrator:
         user_text: str,
         history: list[dict[str, Any]] | None = None,
         language: str | None = None,
+        persona: str | None = None,
+        persona_style: str | None = None,
     ) -> dict[str, Any]:
         contents: list[dict[str, Any]] = sanitize_history(history)
         contents.append({"role": "user", "parts": [{"text": user_text}]})
         tool_trace: list[dict[str, Any]] = []
-        config = self._config(language)
+        config = self._config(language, persona, persona_style)
 
         # Bounded rather than `while True`: the number of rounds is decided by
         # model output, so an unbounded loop is an unbounded spend of quota and
