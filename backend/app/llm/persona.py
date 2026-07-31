@@ -93,7 +93,7 @@ DEFAULT_PERSONA = "standard"
 # posting a novel into every request's system prompt — it would be paid for on
 # every turn of every conversation, and length is the cheapest way to try to
 # bury the rules above it.
-MAX_CUSTOM_CHARS = 600
+MAX_CUSTOM_CHARS = 1600
 
 
 def known() -> list[str]:

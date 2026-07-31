@@ -28,10 +28,16 @@ export type PersonaId = string;
 
 export const DEFAULT_PERSONA: PersonaId = "standard";
 
-/** Mirrors MAX_CUSTOM_CHARS on the server, which enforces it regardless. Held
- *  here too so the limit is visible while typing rather than applied silently
- *  to something already written. */
-export const MAX_STYLE_CHARS = 600;
+/** Mirrors MAX_CUSTOM_CHARS in backend/app/llm/persona.py, which enforces it
+ *  regardless. Held here too so the limit is met while typing rather than
+ *  applied silently to something already written.
+ *
+ *  A mirror is a thing that drifts: this said 600 while the server had moved to
+ *  1600, so the field stopped accepting text the server would have taken. The
+ *  server already publishes the real number as `max_style_chars` on /personas —
+ *  nothing reads it yet, which is exactly why the two numbers were free to part
+ *  company. Change both together until something does. */
+export const MAX_STYLE_CHARS = 1600;
 
 /** A chip in a settings grid, not a title. */
 export const MAX_NAME_CHARS = 24;
