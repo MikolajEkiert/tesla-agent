@@ -50,6 +50,18 @@ import {
 } from "../chats";
 import { greetingParts } from "../i18n";
 import { useLanguage } from "../LanguageContext";
+import {
+  DEFAULT_PERSONA,
+  addCustomPersona,
+  deleteCustomPersona,
+  loadCustomPersonas,
+  loadPersona,
+  personaFields,
+  savePersona,
+  updateCustomPersona,
+  type CustomPersona,
+  type PersonaId,
+} from "../persona";
 import { SettingsScreen } from "./SettingsScreen";
 import { SuggestionChips } from "../components/SuggestionChips";
 import { color, font, radius, READING_WIDTH, space, type, WIDE_LAYOUT } from "../theme";
@@ -216,6 +228,12 @@ export function ChatScreen({
   const [items, setItems] = useState<ChatItem[]>([]);
   const [speechMode, setSpeechMode] = useState<SpeechMode>(DEFAULT_SPEECH_MODE);
   const [voiceChoice, setVoiceChoice] = useState<VoiceChoice>(DEFAULT_VOICE);
+  // How the assistant should sound, and the manners the owner wrote for
+  // themselves. Both are held here rather than read inside the send path: a
+  // message is sent from an event handler, and waiting on storage at that
+  // point would put a pause between the tap and the question appearing.
+  const [persona, setPersona] = useState<PersonaId>(DEFAULT_PERSONA);
+  const [customPersonas, setCustomPersonas] = useState<CustomPersona[]>([]);
   const [speaking, setSpeaking] = useState(false);
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
   const [vehicle, setVehicle] = useState<VehicleState | null>(null);
@@ -505,6 +523,8 @@ export function ChatScreen({
       setVoiceChoice(choice);
       setActiveVoice(choice);
     });
+    loadPersona().then(setPersona);
+    loadCustomPersonas().then(setCustomPersonas);
     loadBargeIn().then(setBargeInEnabled);
     loadVoiceConfirm().then(setVoiceConfirmEnabled);
     loadLiveMode().then(setLiveEnabled);
@@ -558,6 +578,46 @@ export function ChatScreen({
     setActiveVoice(choice);
     saveVoiceChoice(choice);
   }, []);
+
+  const changePersona = useCallback((choice: PersonaId) => {
+    setPersona(choice);
+    savePersona(choice);
+    // Takes effect on the next thing said. A live session has its manner bound
+    // into the token it opened with, and the chat's own history already holds
+    // replies in the old one — rewriting either mid-conversation would be a
+    // change to what has already been said.
+  }, []);
+
+  const saveCustomPersona = useCallback(
+    (name: string, style: string, id?: string) => {
+      const stored = id
+        ? updateCustomPersona(id, name, style)
+        : addCustomPersona(name, style);
+      stored.then((list) => {
+        setCustomPersonas(list);
+        // Selecting a new manner as it is created: writing one and then having
+        // to find and tap it is a second step nobody wants, and the reason to
+        // write it was to use it. Editing an existing one does not steal the
+        // selection — it may not be the one in use.
+        if (!id) {
+          const added = list[list.length - 1];
+          if (added) changePersona(added.id);
+        }
+      });
+    },
+    [changePersona]
+  );
+
+  const removeCustomPersona = useCallback(
+    (id: string) => {
+      deleteCustomPersona(id).then(setCustomPersonas);
+      // The selection cannot be left pointing at something deleted: the server
+      // reads an unknown id with no style text as the standard manner anyway,
+      // so this only makes the screen agree with what would happen.
+      if (persona === id) changePersona(DEFAULT_PERSONA);
+    },
+    [persona, changePersona]
+  );
 
   const changeLiveMode = useCallback((enabled: boolean) => {
     setLiveEnabled(enabled);
@@ -659,7 +719,8 @@ export function ChatScreen({
       setPending(true);
       if (conversationTurn) enterPhase("thinking");
       try {
-        const res = await sendMessage(text, history, language);
+        const { persona: personaId, personaStyle } = personaFields(persona, customPersonas);
+        const res = await sendMessage(text, history, language, personaId, personaStyle);
         // The conversation moved on while this was in flight. The answer
         // belongs to a chat nobody is looking at, and putting it anywhere else
         // would be a lie about who said what.
@@ -787,7 +848,18 @@ export function ChatScreen({
         setPending(false);
       }
     },
-    [history, refreshVehicle, refreshScheduled, language, t, onLocked, speechMode, halt]
+    [
+      history,
+      refreshVehicle,
+      refreshScheduled,
+      language,
+      t,
+      onLocked,
+      speechMode,
+      halt,
+      persona,
+      customPersonas,
+    ]
   );
 
   /**
@@ -1306,7 +1378,8 @@ export function ChatScreen({
     });
     session.allowBargeIn = bargeInEnabled;
     try {
-      await session.start(voiceChoice, language);
+      const live = personaFields(persona, customPersonas);
+      await session.start(voiceChoice, language, live.persona, live.personaStyle);
       // Opening a session takes a network round trip for the token and then a
       // permission-gated getUserMedia, and the conversation can be over before
       // either finishes — the driver taps start, changes their mind, taps end.
@@ -1600,6 +1673,11 @@ export function ChatScreen({
             onVoiceConfirmChange={changeVoiceConfirm}
             liveEnabled={liveEnabled}
             onLiveChange={changeLiveMode}
+            persona={persona}
+            onPersonaChange={changePersona}
+            customPersonas={customPersonas}
+            onCustomPersonaSave={saveCustomPersona}
+            onCustomPersonaDelete={removeCustomPersona}
           />
         </View>
       )}

@@ -65,6 +65,12 @@ tesla-amp.duckdns.org {
 	handle /jobs* {
 		reverse_proxy api:8000
 	}
+	# Which built-in manners the settings screen may offer. Read-only and tiny,
+	# but it needs an entry like everything else: without one it falls to the
+	# catch-all and the picker silently keeps the list it shipped with.
+	handle /personas* {
+		reverse_proxy api:8000
+	}
 	handle {
 		reverse_proxy frontend:80
 	}

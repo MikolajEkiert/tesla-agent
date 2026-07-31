@@ -17,6 +17,7 @@ from app import actions, confirm_phrase, live, scheduler, tools, tts, voice
 from app.auth import gate, passkey
 from app.config import get_settings
 from app.llm import build_orchestrator
+from app.llm import persona
 from app.tesla.adapter import build_adapter
 from app.auth.oauth import disconnect, exchange_code, get_authorize_url, has_tokens
 
@@ -337,6 +338,18 @@ class ChatRequest(BaseModel):
     # Sets the assistant's *default* reply language; unrecognized/omitted
     # values fall back to English in build_system_prompt.
     language: str | None = None
+    # How the assistant should sound: a built-in id from app/llm/persona.py, or
+    # the id of one the owner defined on their phone. An id this server does
+    # not know is normal rather than an error — a custom persona lives on the
+    # device, so its meaning arrives in persona_style below.
+    persona: str | None = None
+    # The owner's own words for a custom persona. Ignored outright when
+    # `persona` names a built-in, capped and flattened before it goes anywhere
+    # near a prompt (persona.sanitize_custom), and framed as a quotation when
+    # it gets there. It changes tone and nothing else; the gate that decides
+    # what may actually happen to the car is in app/actions.py, where no
+    # wording can reach it.
+    persona_style: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -357,7 +370,9 @@ async def health() -> dict[str, str]:
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
     try:
-        result = await orchestrator.chat(req.message, req.history, req.language)
+        result = await orchestrator.chat(
+            req.message, req.history, req.language, req.persona, req.persona_style
+        )
     except Exception as e:
         # Without this, any downstream failure (LLM rate limit, LLM outage,
         # a bad tool call) surfaces as FastAPI's generic, bodyless 500 —
@@ -440,6 +455,11 @@ class LiveTokenRequest(BaseModel):
     # the only party that sees that happen — from here the mint succeeded — so
     # it has to say which one, or the retry asks for the same refusal.
     avoid: str | None = None
+    # The same two fields as ChatRequest, and for the same reason: the live
+    # session is the assistant while it is open, so a manner that applied only
+    # to typed replies would drop away the moment the driver spoke.
+    persona: str | None = None
+    persona_style: str | None = None
 
 
 @app.post("/voice/live-token")
@@ -456,7 +476,13 @@ async def live_token(req: LiveTokenRequest) -> dict[str, Any]:
     which is the same gate everything else goes through.
     """
     try:
-        return await live.mint_token(tts.resolve_voice(req.voice), req.language, req.avoid)
+        return await live.mint_token(
+            tts.resolve_voice(req.voice),
+            req.language,
+            req.avoid,
+            req.persona,
+            req.persona_style,
+        )
     except live.LiveUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
@@ -511,6 +537,24 @@ async def voice_voices() -> dict[str, Any]:
     """What the settings screen offers. Served rather than hardcoded in the app
     so the allow-list has exactly one home — the one the synthesiser checks."""
     return {"voices": sorted(tts.VOICES), "default": tts.DEFAULT_VOICE}
+
+
+@app.get("/personas")
+async def personas() -> dict[str, Any]:
+    """Which built-in manners exist, for the same reason /voice/voices is
+    served rather than listed in the app: one home for the ids, so a persona
+    the settings screen offers is always one the prompt builder honours. The
+    labels stay in the app — they are translated, and this server has no
+    business holding UI copy.
+
+    Says nothing about the owner's own personas: those live on the phone and
+    the server only ever sees them one request at a time.
+    """
+    return {
+        "personas": persona.known(),
+        "default": persona.DEFAULT_PERSONA,
+        "max_style_chars": persona.MAX_CUSTOM_CHARS,
+    }
 
 
 class VoiceAskRequest(BaseModel):

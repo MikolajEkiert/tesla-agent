@@ -233,12 +233,30 @@ def _locale(language: str | None) -> str:
     return _LOCALES.get((language or "").lower(), DEFAULT_LOCALE)
 
 
-def system_instruction(language: str | None) -> str:
-    return build_system_prompt(language) + SPOKEN_INSTRUCTION
+def system_instruction(
+    language: str | None,
+    persona: str | None = None,
+    persona_style: str | None = None,
+) -> str:
+    """The typed assistant's brief, plus what speaking aloud adds, plus the
+    manner the owner chose.
+
+    The persona is threaded through here rather than left to the chat path
+    alone because the live session *is* the assistant for the length of a
+    conversation — it hears, decides and speaks without /chat being involved.
+    A persona that only applied to typing would switch itself off the moment
+    the driver pressed the microphone, which is the one place they are most
+    likely to notice it.
+    """
+    return build_system_prompt(language, persona, persona_style) + SPOKEN_INSTRUCTION
 
 
 async def mint_token(
-    voice: str, language: str | None = None, avoid: str | None = None
+    voice: str,
+    language: str | None = None,
+    avoid: str | None = None,
+    persona: str | None = None,
+    persona_style: str | None = None,
 ) -> dict[str, Any]:
     """A credential for one session, locked to how that session may be used.
 
@@ -252,7 +270,7 @@ async def mint_token(
     last: Exception | None = None
     for model in _candidates(avoid):
         try:
-            return await _mint_on(settings, model, voice, language)
+            return await _mint_on(settings, model, voice, language, persona, persona_style)
         except Exception as e:  # SDK raises a family of provider errors
             last = e
             print(f"live: {model} refused a token ({e}); trying the next one")
@@ -260,7 +278,12 @@ async def mint_token(
 
 
 async def _mint_on(
-    settings: Any, model: str, voice: str, language: str | None
+    settings: Any,
+    model: str,
+    voice: str,
+    language: str | None,
+    persona: str | None = None,
+    persona_style: str | None = None,
 ) -> dict[str, Any]:
     now = dt.datetime.now(dt.timezone.utc)
     client = genai.Client(api_key=settings.gemini_api_key)
@@ -290,7 +313,7 @@ async def _mint_on(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)
             ),
         ),
-        system_instruction=system_instruction(language),
+        system_instruction=system_instruction(language, persona, persona_style),
         # The same tools the typed assistant has. Bound to the token rather
         # than left to the client, so a browser cannot widen its own reach.
         tools=[types.Tool(function_declarations=_live_declarations())],

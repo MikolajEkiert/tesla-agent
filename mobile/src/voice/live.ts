@@ -311,7 +311,16 @@ export class LiveSession {
     this.handlers = handlers;
   }
 
-  async start(voice: string, language?: string): Promise<void> {
+  async start(
+    voice: string,
+    language?: string,
+    /** The manner the session should speak in, from src/persona.ts. Bound into
+     *  the token server-side, so it is fixed for the length of the
+     *  conversation — changing the setting mid-exchange takes effect on the
+     *  next one, exactly like the live/legacy transport switch does. */
+    persona?: string,
+    personaStyle?: string
+  ): Promise<void> {
     if (!liveSupported()) throw new Error("live audio unsupported here");
 
     // Must happen inside the gesture that started the conversation, like every
@@ -330,7 +339,13 @@ export class LiveSession {
     // The microphone is already held and is kept across both.
     let refused: string | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const { token, model, tools } = await fetchLiveToken(voice, language, refused);
+      const { token, model, tools } = await fetchLiveToken(
+        voice,
+        language,
+        refused,
+        persona,
+        personaStyle
+      );
       this.model = model;
       try {
         await this.openSocket(token, model, tools);

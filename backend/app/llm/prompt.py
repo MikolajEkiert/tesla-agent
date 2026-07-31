@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.llm.persona import resolve as resolve_persona
+
 
 BASE_SYSTEM_PROMPT = (
     "You are the in-car voice assistant for the owner's Tesla Model 3. "
@@ -52,15 +54,29 @@ DOMAIN_VOCABULARY = (
 _LANGUAGE_NAMES = {"en": "English", "pl": "Polish"}
 
 
-def build_system_prompt(language: str | None) -> str:
+def build_system_prompt(
+    language: str | None,
+    persona: str | None = None,
+    custom_style: str | None = None,
+) -> str:
     """Append a default reply-language instruction, driven by the app's
     language setting (see mobile/src/i18n.ts). This only sets the default —
     if the user writes in a different language, the model should follow
-    their lead rather than stay locked to the setting."""
+    their lead rather than stay locked to the setting.
+
+    The persona goes last, after every rule it must not override, and carries
+    only manner: see app/llm/persona.py. Passing none is the default manner,
+    which is what every caller that predates personas gets.
+    """
     name = _LANGUAGE_NAMES.get(language or "en", "English")
+    # Stripped: the built-in notes and the custom wrapper each carry their own
+    # leading space for callers that concatenate them directly, and two of them
+    # meeting here would put a double space mid-prompt.
+    style = resolve_persona(persona, custom_style).strip()
     return (
         f"{BASE_SYSTEM_PROMPT} Reply in {name} by default, unless the user "
-        "writes to you in a different language — then reply in that language instead."
+        "writes to you in a different language — then reply in that language "
+        f"instead.{(' ' + style) if style else ''}"
     )
 
 
