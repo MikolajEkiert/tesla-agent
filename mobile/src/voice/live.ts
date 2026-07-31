@@ -243,6 +243,16 @@ export class LiveSession {
   private endAfterReply = false;
   /** Whether any of that goodbye has actually been heard yet. */
   private endSpoke = false;
+  /**
+   * The server has said this turn is finished generating.
+   *
+   * Distinct from the playback queue being empty, and conflating the two is
+   * what cut long replies off. Chunks arrive over the socket while earlier
+   * ones are already playing, so a reply that is generated a little slower
+   * than it plays drains the queue several times before it is actually over —
+   * every gap in the stream looked like the end of the turn.
+   */
+  private turnEnded = false;
   /** Backstop for a model that asks to close and then says nothing. */
   private endTimer: ReturnType<typeof setTimeout> | null = null;
   /** The rest of this reply was cut off by a tap and must not be heard or
@@ -482,8 +492,10 @@ export class LiveSession {
         this.handlers.onPhase("speaking");
       }
       // The farewell has started. Until this, a session asked to close has
-      // nothing to wait for and must not close — see settleTurn.
+      // nothing to wait for and must not close — see maybeSettle.
       if (this.endAfterReply) this.endSpoke = true;
+      // More is being said, whatever the queue happens to hold this instant.
+      this.turnEnded = false;
       this.touch();
       this.play(decodeBase64(audio));
     }
@@ -494,6 +506,7 @@ export class LiveSession {
       // the log matches what was actually heard in the car.
       this.stopPlayback();
       this.speaking = false;
+      this.turnEnded = false;
       this.flushSaid();
       // Talking over a goodbye is not agreeing with it. Whatever they have
       // started saying, the conversation is evidently not finished, so the
@@ -514,36 +527,37 @@ export class LiveSession {
       this.suppressed = false;
       this.flushHeard();
       this.flushSaid();
-      // Audio is queued ahead of the cursor, so the turn being complete is not
-      // the same as the car having heard it. play()'s onended settles the
-      // phase when the queue actually drains.
-      if (!this.speaking || this.playingSources === 0) {
-        this.speaking = false;
-        this.settleTurn();
-      }
+      // Generating is finished. Being heard is not: audio is queued ahead of
+      // the cursor, so this only settles the turn if the queue is already
+      // empty; otherwise play()'s onended does it when the last chunk stops.
+      this.turnEnded = true;
+      this.maybeSettle();
     }
   }
 
   /**
-   * The reply is over and the microphone is the driver's again — unless the
-   * model closed the conversation, in which case this is where the closing
-   * line has finished being heard and the session can go.
+   * Is the turn over — really over, on both counts?
    *
-   * Both routes out of a turn come through here, because there are two and
-   * which one runs depends on whether audio was still queued when the turn
-   * completed. Ending in only one of them would work most of the time, which
-   * is the worst way for this to be wrong.
+   * Two conditions, and they are not the same one. The server says when it has
+   * finished generating; the playback queue says when the car has finished
+   * hearing it. A reply generated a little slower than it plays empties that
+   * queue several times on the way through, and treating any of those as the
+   * end is what cut long answers off mid-sentence and hung up.
+   *
+   * Every route out of a turn comes through here, because which one arrives
+   * last depends on the network.
    */
-  private settleTurn(): void {
+  private maybeSettle(): void {
+    if (this.playingSources > 0 || !this.turnEnded) return;
+    this.speaking = false;
+
     // Asked to close, but the goodbye has not been said yet.
     //
     // The model calls end_conversation in one turn and speaks in the next: the
     // farewell is generated only after this side answers the tool call, so the
     // turn carrying the call completes with no audio in it at all. Concluding
-    // there tore the session down a moment before the closing line existed,
-    // which is exactly what "it cuts off the last reply" means. So a session
-    // asked to close goes back to listening and waits for the words it was
-    // promised.
+    // there tore the session down a moment before the closing line existed.
+    // A session asked to close waits for the words it was promised.
     if (this.endAfterReply && !this.endSpoke) {
       this.handlers.onPhase("listening");
       return;
@@ -913,10 +927,10 @@ export class LiveSession {
     this.playingSources += 1;
     source.onended = () => {
       this.playingSources -= 1;
-      if (this.playingSources === 0 && this.speaking && !this.closed) {
-        this.speaking = false;
-        this.settleTurn();
-      }
+      // The queue is empty — which means the turn is over only if the server
+      // has also said so. Otherwise this is a gap between chunks and there is
+      // more of the sentence still to come.
+      if (this.playingSources === 0 && !this.closed) this.maybeSettle();
     };
   }
 
