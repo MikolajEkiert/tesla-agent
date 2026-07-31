@@ -384,7 +384,15 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
 
 @app.post("/voice/transcribe")
-async def voice_transcribe(request: Request, language: str | None = None) -> dict[str, str]:
+async def voice_transcribe(
+    request: Request,
+    language: str | None = None,
+    # What the live session's own recogniser made of the same audio, when there
+    # is one. It is a hint, not an answer — see _draft_clause in app/voice.py —
+    # and it is what stops this call rewriting a correctly-heard "Orlen" into
+    # the nearest word from the car's vocabulary.
+    draft: str | None = None,
+) -> dict[str, str]:
     """Audio in, text out. Nothing else.
 
     The transcript goes back to the app, which sends it through /chat like any
@@ -403,7 +411,7 @@ async def voice_transcribe(request: Request, language: str | None = None) -> dic
     audio = await request.body()
     try:
         text = await voice.transcribe(
-            audio, request.headers.get("content-type", ""), language
+            audio, request.headers.get("content-type", ""), language, draft
         )
     except voice.TranscriptionError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -555,6 +563,27 @@ async def personas() -> dict[str, Any]:
         "default": persona.DEFAULT_PERSONA,
         "max_style_chars": persona.MAX_CUSTOM_CHARS,
     }
+
+
+class PersonaPreviewRequest(BaseModel):
+    style: str | None = None
+
+
+@app.post("/personas/preview")
+async def persona_preview(req: PersonaPreviewRequest) -> dict[str, Any]:
+    """What a hand-written manner would have added to it, before it is saved.
+
+    The additions happen anyway, at prompt-build time (app/llm/persona.py) —
+    this route exists so they are not a secret. A feature whose whole job is to
+    append sentences to what somebody wrote should be able to say which
+    sentences, and the editor asks as they type.
+
+    Ids only, no prompt text: the app shows these translated, and it is the
+    same division as everywhere else here — the server owns the prompt, the app
+    owns the words the owner reads. Costs no model call and touches nothing.
+    """
+    style = persona.sanitize_custom(req.style)
+    return {"additions": persona.augment(style) if style else []}
 
 
 class VoiceAskRequest(BaseModel):

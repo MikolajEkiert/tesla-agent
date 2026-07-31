@@ -14,6 +14,7 @@ import {
   BackendError,
   deletePasskey,
   fetchPasskeys,
+  fetchPersonaAdditions,
   fetchVoices,
   passkeysSupported,
   registerPasskey,
@@ -53,6 +54,18 @@ const LANGUAGES: { code: Language; labelKey: "langEnglish" | "langPolish" }[] = 
 /** A settings column stops being readable long before a window stops growing:
  *  three segments stretched across a laptop are three targets a metre apart. */
 const SETTINGS_WIDTH = 720;
+
+/** The clauses the server may append to a hand-written manner, in this app's
+ *  words. Keyed by the ids /personas/preview returns; an id with no entry is
+ *  simply not shown, so a newer server cannot print English at a Polish
+ *  reader. */
+const ADDITION_LABELS: Record<string, TranslationKey> = {
+  terse: "personaAdditionTerse",
+  length: "personaAdditionLength",
+  facts: "personaAdditionFacts",
+  consistency: "personaAdditionConsistency",
+  spoken: "personaAdditionSpoken",
+};
 
 const SPEECH_MODES: { mode: SpeechMode; labelKey: TranslationKey }[] = [
   { mode: "off", labelKey: "speechOff" },
@@ -146,6 +159,37 @@ export function SettingsScreen({
   // dialog because Alert.alert does nothing on the web — see ConfirmDialog.
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const personaFull = customPersonas.length >= MAX_CUSTOM_PERSONAS;
+
+  /**
+   * What Amp will add to the note being written.
+   *
+   * Asked of the server rather than worked out here: the rules that decide it
+   * live next to the prompt they join, and a second copy in the app would
+   * eventually disagree with the one that actually runs — which for a preview
+   * is worse than having no preview at all.
+   *
+   * Debounced, because it would otherwise fire on every keystroke, and left
+   * empty on any failure: this explains a thing that happens anyway, so a
+   * dropped request costs the explanation and not the manner.
+   */
+  const [additions, setAdditions] = useState<string[]>([]);
+  useEffect(() => {
+    const style = draftStyle.trim();
+    if (!editing || !style) {
+      setAdditions([]);
+      return;
+    }
+    let current = true;
+    const timer = setTimeout(() => {
+      fetchPersonaAdditions(style)
+        .then((ids) => current && setAdditions(ids))
+        .catch(() => current && setAdditions([]));
+    }, 400);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [draftStyle, editing]);
 
   const openEditor = (existing?: CustomPersona) => {
     setEditing({ id: existing?.id });
@@ -372,6 +416,23 @@ export function SettingsScreen({
               multiline
               textAlignVertical="top"
             />
+            {/* Shown before saving, not after: the point is that the owner
+                can see what their note is missing while they still have the
+                cursor in it, and either accept the addition or write the thing
+                themselves. An id the app does not recognise is skipped rather
+                than printed raw — a newer server may know rules this build
+                has no words for. */}
+            {additions.length > 0 && (
+              <Text style={styles.personaAdditions}>
+                {t("personaAdditions", {
+                  items: additions
+                    .map((id) => ADDITION_LABELS[id])
+                    .filter(Boolean)
+                    .map((key) => t(key))
+                    .join(", "),
+                })}
+              </Text>
+            )}
             <View style={styles.personaFormRow}>
               <Pressable
                 onPress={closeEditor}
@@ -811,6 +872,16 @@ const styles = StyleSheet.create({
   // becoming a text editor.
   personaStyleInput: {
     minHeight: 96,
+  },
+  // Quieter than the note it comments on: this is Amp explaining itself, not
+  // an error and not a requirement.
+  personaAdditions: {
+    ...type.body,
+    fontSize: 12,
+    lineHeight: 17,
+    color: color.textTertiary,
+    marginTop: space.xs,
+    marginBottom: space.xs,
   },
   personaFormRow: {
     flexDirection: "row",

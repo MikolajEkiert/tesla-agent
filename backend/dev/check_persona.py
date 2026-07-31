@@ -26,6 +26,7 @@ from app.llm.persona import (  # noqa: E402  (path set above)
     DEFAULT_PERSONA,
     MAX_CUSTOM_CHARS,
     PERSONAS,
+    augment,
     known,
     resolve,
     sanitize_custom,
@@ -116,10 +117,16 @@ for text in HOSTILE:
         "\n" not in style and "\r" not in style,
         "a newline survived",
     )
+    # Anything after the closing marker is this server's own filling-in, never
+    # a word of the owner's — which is what makes the quotation a quotation.
+    # (Before the additions existed this asserted that the prompt *ended* at
+    # the marker; the property it was really protecting is this one.)
+    tail = prompt.split("STYLE>>>", 1)[1] if "STYLE>>>" in prompt else "!"
     check(
         f"quoted: {text[:28]!r}…",
-        "<<<STYLE" in prompt and prompt.rstrip().endswith("STYLE>>>"),
-        "the style note is not inside the markers",
+        "<<<STYLE" in prompt
+        and (tail.strip() == "" or tail.startswith(" Filling in what that note leaves open:")),
+        f"text escaped the quotation: {tail[:60]!r}",
     )
     check(
         f"framed before it is read: {text[:28]!r}…",
@@ -140,6 +147,58 @@ check(
     "control characters are dropped",
     "\x00" not in sanitize_custom("casual\x00\x07 tone") and "\x07" not in sanitize_custom("casual\x00\x07 tone"),
 )
+
+# --- filling in what a note leaves out ---------------------------------------
+#
+# The property that matters is not which clauses fire — that is a keyword table
+# and it will be tuned — but that the owner's sentence survives the process
+# untouched, and that a note which already covers something is not told it
+# twice.
+AUGMENT_CASES: list[tuple[str, set[str], set[str], str]] = [
+    # (note, must include, must NOT include, why it is in the list)
+    (
+        "Krótkie meldunki przez radio, jak inżynier wyścigowy. Zawsze jedno zdanie.",
+        {"facts"},
+        {"length", "consistency", "terse"},
+        "says its own length and 'zawsze' — only the character needs guarding",
+    ),
+    ("śmieszny", {"terse", "length"}, set(), "one word is a label, not an instruction"),
+    (
+        "Mów jak pirat, rzucaj morskimi tekstami",
+        {"facts", "length"},
+        set(),
+        "a role is what invents figures",
+    ),
+    (
+        "Odpowiadaj spokojnie i uprzejmie, pełnymi zdaniami, w każdej sytuacji.",
+        set(),
+        {"length", "consistency", "facts", "terse", "spoken"},
+        "a note that already says everything is left alone",
+    ),
+    ("Dodawaj emoji do każdej odpowiedzi", {"spoken"}, {"consistency"}, "asked for a screen-only device"),
+    ("Wrzucaj 🔥 gdzie pasuje", {"spoken"}, set(), "the emoji is itself the request"),
+    ("krotko i na temat", {"consistency"}, {"length"}, "diacritics dropped, cue still counts"),
+]
+
+for note, must, must_not, why in AUGMENT_CASES:
+    got = set(augment(note))
+    check(f"augment {note[:26]!r}… ({why})", must <= got and not (must_not & got), f"got {sorted(got)}")
+
+for note, *_ in AUGMENT_CASES:
+    prompt = build_system_prompt("pl", "p-a", note)
+    # The whole promise of the feature: what is quoted is what was typed.
+    check(
+        f"note survives verbatim: {note[:26]!r}…",
+        f"<<<STYLE {note} STYLE>>>" in prompt,
+        "the owner's sentence was edited",
+    )
+    check(
+        f"additions sit outside the quotation: {note[:20]!r}…",
+        "Filling in what that note leaves open" not in prompt.split("STYLE>>>")[0],
+    )
+
+check("a note needing nothing gets nothing appended", "Filling in" not in build_system_prompt("pl", "p-b", AUGMENT_CASES[3][0]))
+check("augmenting an empty note is empty", augment("") == [] or "terse" in augment(""))
 
 # --- the spoken path --------------------------------------------------------
 #

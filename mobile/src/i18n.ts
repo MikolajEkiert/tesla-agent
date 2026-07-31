@@ -184,6 +184,14 @@ const STRINGS = {
     personaCustomFull: "That's as many as Amp keeps. Delete one to add another.",
     personaCustomDeleteTitle: "Delete this manner?",
     personaCustomDeleteBody: "It's removed from this device for good.",
+    // What gets appended to a note, named in the owner's language. The server
+    // sends ids; these are the words for them.
+    personaAdditions: "Amp will fill in: {items}.",
+    personaAdditionTerse: "reading it as a register rather than a catchphrase",
+    personaAdditionLength: "keeping to a sentence or two",
+    personaAdditionFacts: "leaving the figures exactly as the car reported them",
+    personaAdditionConsistency: "using it in short replies too",
+    personaAdditionSpoken: "dropping what can't be read aloud",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -356,6 +364,12 @@ const STRINGS = {
     personaCustomFull: "Tyle Amp przechowuje. Usuń jeden, żeby dodać kolejny.",
     personaCustomDeleteTitle: "Usunąć ten charakter?",
     personaCustomDeleteBody: "Zniknie z tego urządzenia na dobre.",
+    personaAdditions: "Amp dopisze: {items}.",
+    personaAdditionTerse: "potraktowanie tego jako stylu, nie powiedzonka",
+    personaAdditionLength: "trzymanie się jednego–dwóch zdań",
+    personaAdditionFacts: "pozostawienie liczb dokładnie takimi, jakie podało auto",
+    personaAdditionConsistency: "stosowanie tego też w krótkich odpowiedziach",
+    personaAdditionSpoken: "pominięcie tego, czego nie da się przeczytać na głos",
   },
 } as const;
 

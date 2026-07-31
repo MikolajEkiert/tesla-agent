@@ -209,8 +209,19 @@ export async function fetchPersonas(): Promise<{
  * Posts the recording as the raw body rather than multipart form data: one
  * blob, one content type, no parser on either end.
  */
-export async function transcribe(audio: Blob, language?: string): Promise<string> {
-  const query = language ? `?language=${encodeURIComponent(language)}` : "";
+export async function transcribe(
+  audio: Blob,
+  language?: string,
+  /** What the live session's own recogniser made of this audio, when there is
+   *  one. Sent as evidence rather than as an answer: it is right about names
+   *  and brands exactly where the tuned transcriber is tempted to bend them
+   *  onto the car's vocabulary. See _draft_clause in backend/app/voice.py. */
+  draft?: string
+): Promise<string> {
+  const params = new URLSearchParams();
+  if (language) params.set("language", language);
+  if (draft) params.set("draft", draft);
+  const query = params.toString() ? `?${params}` : "";
   const res = await fetch(`${DEFAULT_BASE_URL}/voice/transcribe${query}`, {
     ...CREDENTIALS,
     method: "POST",
@@ -327,6 +338,24 @@ export async function fetchVoices(): Promise<{ voices: string[]; default: string
   const res = await fetch(`${DEFAULT_BASE_URL}/voice/voices`, CREDENTIALS);
   await guard(res);
   return res.json();
+}
+
+/**
+ * What Amp would add to a hand-written manner, before it is saved.
+ *
+ * Ids, not sentences — the app owns the words the owner reads. The additions
+ * happen server-side whether or not this is called, so a failure here costs the
+ * preview and nothing else; the caller shows no list rather than an error.
+ */
+export async function fetchPersonaAdditions(style: string): Promise<string[]> {
+  const res = await fetch(`${DEFAULT_BASE_URL}/personas/preview`, {
+    ...CREDENTIALS,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ style }),
+  });
+  await guard(res);
+  return (await res.json()).additions ?? [];
 }
 
 export async function fetchVehicleState(): Promise<VehicleState> {

@@ -332,10 +332,15 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "find_chargers",
         "description": (
-            "Find charging sites, nearest first. By default: Tesla's own "
+            "Find charging sites, nearest first — for charging this car, and "
+            "only that. A driver naming a shop, restaurant or petrol station "
+            "wants find_places, even if that chain also runs chargers. "
+            "By default: Tesla's own "
             "network around the car, including live free-stall counts. "
             "Set `place` to search somewhere else (a town, address or "
-            "landmark) instead of around the car. Set include_other_networks "
+            "landmark) instead of around the car — never the name of the "
+            "business the driver asked you to find, which would answer 'take "
+            "me to X' with 'chargers near an X'. Set include_other_networks "
             "to true only when the user actually asks about non-Tesla "
             "chargers. Results away from the car, and all non-Tesla results, "
             "come from a community database and have no live availability — "
@@ -418,7 +423,10 @@ TOOLS: list[dict[str, Any]] = [
         "name": "find_places",
         "description": (
             "Find real places: restaurants, cafés, shops, hotels, parking, "
-            "petrol, pharmacies. Searches around the car unless `place` names "
+            "pharmacies, and petrol stations including named chains — the car "
+            "being electric does not turn a request for a petrol station, a "
+            "shop or a burger into a charging stop, and this is the tool for "
+            "all of them. Searches around the car unless `place` names "
             "somewhere else ('in Kraków', 'near the airport'). "
             "Results carry only what the source returned — if a rating, "
             "address or opening state is missing from a result, say you don't "

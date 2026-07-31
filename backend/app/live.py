@@ -93,9 +93,17 @@ SPOKEN_INSTRUCTION = (
     # the model that now does the listening itself. A general speech model gets
     # these words wrong because in ordinary Polish they are rare and their
     # neighbours are common; naming them is the cheapest correction there is.
-    "You are listening over road noise in a moving car, and the words that "
-    f"matter most are these: {DOMAIN_VOCABULARY}. Prefer them over "
-    "similar-sounding words. "
+    # And the same correction the transcriber needed (see _DOMAIN_HINT in
+    # app/voice.py): a list of words to recognise, never a list to choose from.
+    # The stakes are higher here than on a transcript, because this model acts:
+    # bending a heard "Orlen" onto "Supercharger" is not a wrong line in the
+    # log, it is a route to the wrong place.
+    "You are listening over road noise in a moving car, and these words come up "
+    f"constantly and are easy to mishear: {DOMAIN_VOCABULARY}. Recognise them "
+    "when they are said, and never choose one in place of something else you "
+    "heard: a brand, shop, restaurant, petrol station, street or town that is "
+    "not on that list stays exactly what it was, however close a listed word "
+    "sounds and however much better it would fit the subject. "
     # And the other half, which matters more: a model that mishears is not the
     # problem, a model that acts on a mishearing is. Numbers especially — "na
     # sto" and "sto procent" are one slurred syllable apart, and one of them is

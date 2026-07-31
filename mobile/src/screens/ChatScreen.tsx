@@ -1298,10 +1298,19 @@ export function ChatScreen({
         // the audio itself and has already acted. If this fails — no signal, a
         // spent quota — the first transcript simply stays, which is exactly
         // what was there before.
+        //
+        // The rough transcript goes with the audio, and that is not a detail.
+        // Without it the correction was a second blind guess by a call whose
+        // whole instruction is car vocabulary, and it corrected "najbliższego
+        // Orlenu" — heard correctly here — into "najbliższego Superchargera",
+        // while the assistant drove to the petrol station it had understood
+        // perfectly well. Measured 6/6 with the old wording. Sent as evidence,
+        // this text anchors the names and the audio still overrules it
+        // everywhere it is clear.
         const rowId = id();
         appendItems([{ kind: "message", id: rowId, role: "user", text }]);
         if (!audio) return;
-        void transcribe(audio, language)
+        void transcribe(audio, language, text)
           .then((better) => {
             const clean = better.trim();
             if (!clean || clean === text) return;
