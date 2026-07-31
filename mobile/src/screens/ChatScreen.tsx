@@ -887,7 +887,11 @@ export function ChatScreen({
       conversationRecorderRef.current = null;
       const denied =
         e instanceof Error && (e.name === "NotAllowedError" || e.name === "SecurityError");
-      setError(denied ? t("voiceDenied") : t("voiceFailed"));
+      setError(
+        denied
+          ? t("voiceDenied")
+          : t("voiceMicFailed", { reason: (e instanceof Error && e.name) || "?" })
+      );
       stopConversation();
     });
   };

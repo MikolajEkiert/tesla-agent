@@ -29,6 +29,39 @@ const MIN_SECONDS = 0.3;
 export class VoiceUnavailableError extends Error {}
 export class NothingRecordedError extends Error {}
 
+/**
+ * Get a microphone, asking for less if the browser objects to the details.
+ *
+ * The tuned request is the one worth having: one channel, echo cancellation on
+ * (barge-in depends on it), noise suppression on (a car is loud). Chrome takes
+ * all three and so does desktop Safari.
+ *
+ * iOS does not, reliably. `channelCount` and `noiseSuppression` are the two it
+ * has historically refused outright rather than ignored, and a refused
+ * constraint is an OverconstrainedError thrown before any permission prompt —
+ * which is why this failed the instant the button was pressed, on a phone that
+ * had already granted access, while the same build worked on a laptop.
+ *
+ * So the constraints are treated as a preference rather than a requirement: if
+ * the detailed request is refused for any reason other than the owner saying
+ * no, ask again for a plain microphone. A mono 16 kHz stream is what the
+ * recorder wants, but a stereo 48 kHz one it downmixes is infinitely better
+ * than no microphone at all.
+ */
+async function openMicrophone(): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
+  } catch (e) {
+    // A refusal is a refusal — asking again in a plainer voice will not change
+    // the owner's mind, and retrying would only produce a second prompt.
+    const name = e instanceof Error ? e.name : "";
+    if (name === "NotAllowedError" || name === "SecurityError") throw e;
+    return await navigator.mediaDevices.getUserMedia({ audio: true });
+  }
+}
+
 export function voiceInputSupported(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -263,11 +296,26 @@ export class VoiceRecorder {
   async start(): Promise<void> {
     if (!voiceInputSupported()) throw new VoiceUnavailableError("no microphone API");
 
-    // Must be called from a user gesture on iOS, or the AudioContext starts
-    // suspended and every frame arrives silent.
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-    });
+    // The context is built and resumed first, before anything is awaited.
+    //
+    // iOS only honours resume() while the tap that led here is still the
+    // current user gesture, and awaiting getUserMedia spends it — the
+    // permission prompt, or merely the round trip on an already-granted
+    // permission, ends the gesture. Resuming afterwards is a coin toss: it
+    // either rejects outright or leaves a context that says "running" and
+    // delivers silent frames. Both were reachable from one tap of the
+    // microphone on a phone where the same build worked on a laptop.
+    const Ctor = window.AudioContext || (window as any).webkitAudioContext;
+    try {
+      this.context = new Ctor({ sampleRate: SAMPLE_RATE });
+    } catch {
+      // iOS refuses a forced rate rather than resampling. The recorder handles
+      // whatever it gets and resamples on the way out (see stop()).
+      this.context = new Ctor();
+    }
+    if (this.context!.state === "suspended") await this.context!.resume();
+
+    this.stream = await openMicrophone();
 
     // cancel() may have run while that was pending — a conversation ended, the
     // app locked, the screen unmounted. It had nothing to release at the time,
@@ -277,16 +325,10 @@ export class VoiceRecorder {
     if (this.stopping) {
       this.stream.getTracks().forEach((track) => track.stop());
       this.stream = null;
+      void this.context!.close().catch(() => {});
+      this.context = null;
       throw new VoiceUnavailableError("cancelled before it started");
     }
-
-    const Ctor = window.AudioContext || (window as any).webkitAudioContext;
-    try {
-      this.context = new Ctor({ sampleRate: SAMPLE_RATE });
-    } catch {
-      this.context = new Ctor();
-    }
-    if (this.context!.state === "suspended") await this.context!.resume();
 
     this.chunks = [];
     this.frames = 0;

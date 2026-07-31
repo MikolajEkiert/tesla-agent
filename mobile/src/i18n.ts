@@ -112,6 +112,12 @@ const STRINGS = {
     voiceSilence: "Didn't catch anything",
     voiceDenied: "Microphone access denied",
     voiceFailed: "Couldn't transcribe that",
+    // Names the microphone rather than the transcriber, and carries the
+    // browser's own word for what went wrong. A failure to open the mic used
+    // to report "couldn't transcribe that" — a sentence about a step that had
+    // not been reached, which is how a refused audio constraint on one phone
+    // looked exactly like a spent transcription quota.
+    voiceMicFailed: "Couldn't start the microphone ({reason})",
     speechSection: "Spoken replies",
     speechOff: "Off",
     speechVoice: "After voice",
@@ -257,6 +263,7 @@ const STRINGS = {
     voiceSilence: "Nic nie usłyszałem",
     voiceDenied: "Brak dostępu do mikrofonu",
     voiceFailed: "Nie udało się rozpoznać mowy",
+    voiceMicFailed: "Nie udało się uruchomić mikrofonu ({reason})",
     speechSection: "Czytanie odpowiedzi",
     speechOff: "Nigdy",
     speechVoice: "Po głosie",

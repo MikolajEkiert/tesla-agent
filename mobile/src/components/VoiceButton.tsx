@@ -117,7 +117,11 @@ export function VoiceButton({
       setPhase("idle");
       const denied =
         e instanceof Error && (e.name === "NotAllowedError" || e.name === "SecurityError");
-      onStatus(denied ? t("voiceDenied") : t("voiceFailed"));
+      onStatus(
+        denied
+          ? t("voiceDenied")
+          : t("voiceMicFailed", { reason: (e instanceof Error && e.name) || "?" })
+      );
     }
   }, [disabled, finish, onStatus, phase, t]);
 
