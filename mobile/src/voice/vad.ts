@@ -128,11 +128,41 @@ export interface BlockClass {
   consonant: boolean;
 }
 
+/** The rate every threshold in VOICE_PROFILE was measured at. */
+export const PROFILE_RATE = 16000;
+
+/**
+ * Put a tilt measured at some other sample rate back on the profile's scale.
+ *
+ * Tilt is a ratio of differences to amplitudes, so it depends on how far apart
+ * the samples are in time: for a pure tone it is 4·sin²(πf/fs), which means the
+ * *same voice* reads nearly ten times lower at 48 kHz than at 16 kHz. Measured
+ * on a 300+900 Hz vowel: 0.0329 at 16 kHz, 0.0038 at 48 kHz — one side of
+ * minTilt (0.02) and then the other. Left uncorrected, a phone whose hardware
+ * refuses 16 kHz would decide that nobody had spoken, every time.
+ *
+ * So the frequency implied by the measurement is recovered and re-measured at
+ * the profile's rate. The obvious shortcut — scaling by (fs/16000)² — is right
+ * for speech and badly wrong above it, because sin saturates: it turns white
+ * noise from 2.26 into 16.7 and would drag hiss through the maxTilt gate that
+ * exists to catch it. This inverts the relationship exactly instead, and lands
+ * within a few percent from rumble to hiss.
+ */
+export function normaliseTilt(tilt: number, rate: number): number {
+  if (rate === PROFILE_RATE || !rate) return tilt;
+  const ratio = Math.min(1, Math.sqrt(Math.max(0, tilt)) / 2);
+  return 4 * Math.sin((rate / PROFILE_RATE) * Math.asin(ratio)) ** 2;
+}
+
 export function classifyBlock(
   block: Float32Array,
-  profile: VoiceProfile = VOICE_PROFILE
+  profile: VoiceProfile = VOICE_PROFILE,
+  /** The rate this block was captured at. Defaults to the one the thresholds
+   *  were measured at, so every existing caller is unaffected. */
+  rate: number = PROFILE_RATE
 ): BlockClass {
-  const { rms, tilt } = blockStats(block);
+  const { rms, tilt: raw } = blockStats(block);
+  const tilt = normaliseTilt(raw, rate);
   if (rms < profile.minRms || tilt > profile.maxTilt) {
     return { inBand: false, consonant: false };
   }

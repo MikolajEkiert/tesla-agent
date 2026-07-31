@@ -16,7 +16,7 @@
  * key already covers voice input.
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { BLOCK_SIZE, classifyBlock, HOP_SIZE, SPEECH_EVIDENCE } from "./vad";
+import { BLOCK_SIZE, classifyBlock, HOP_SIZE, SPEECH_EVIDENCE, VOICE_PROFILE } from "./vad";
 
 export const SAMPLE_RATE = 16000;
 
@@ -340,7 +340,7 @@ export class VoiceRecorder {
     this.pendingBlock = null;
     this.onsetStartAt = null;
     this.onsetFired = false;
-    this.source = this.context!.createMediaStreamSource(this.stream);
+    this.source = await this.attachSource();
     this.node = await this.buildNode();
     this.source.connect(this.node);
     // Safari will not pull frames through a node that reaches no destination.
@@ -350,6 +350,32 @@ export class VoiceRecorder {
     mute.gain.value = 0;
     this.node.connect(mute);
     mute.connect(this.context!.destination);
+  }
+
+  /**
+   * Connect the microphone to the graph, giving up the preferred rate if that
+   * is what it takes.
+   *
+   * Safari will not attach a stream to a context running at a rate the
+   * hardware did not choose: `new AudioContext({sampleRate: 16000})` is
+   * accepted, and then createMediaStreamSource throws InvalidStateError — the
+   * error the owner saw on the phone, instantly, on a build that worked on a
+   * laptop. Chrome accepts 16 kHz outright and never reaches the fallback.
+   *
+   * Rebuilding at the hardware rate costs nothing downstream: stop() already
+   * resamples to 16 kHz on the way out, and the classifier is told the rate it
+   * is actually looking at (see analyse).
+   */
+  private async attachSource(): Promise<MediaStreamAudioSourceNode> {
+    try {
+      return this.context!.createMediaStreamSource(this.stream!);
+    } catch {
+      const Ctor = window.AudioContext || (window as any).webkitAudioContext;
+      await this.context!.close().catch(() => {});
+      this.context = new Ctor();
+      if (this.context!.state === "suspended") await this.context!.resume();
+      return this.context!.createMediaStreamSource(this.stream!);
+    }
   }
 
   private async buildNode(): Promise<AudioNode> {
@@ -388,9 +414,17 @@ export class VoiceRecorder {
       source = merged;
     }
 
+    // The rate matters to the classifier, not just to the clock: tilt is a
+    // ratio between neighbouring samples, so the same voice reads differently
+    // at 48 kHz than at the 16 kHz the thresholds were measured at.
+    const rate = this.context?.sampleRate ?? SAMPLE_RATE;
     let offset = 0;
     while (offset + BLOCK_SIZE <= source.length) {
-      const { inBand, consonant } = classifyBlock(source.subarray(offset, offset + BLOCK_SIZE));
+      const { inBand, consonant } = classifyBlock(
+        source.subarray(offset, offset + BLOCK_SIZE),
+        VOICE_PROFILE,
+        rate
+      );
       // Advance the totals by the hop, not the block: windows overlap, and
       // counting the block would report twice the audio that actually played.
       if (inBand) this.inBandSamples += HOP_SIZE;
