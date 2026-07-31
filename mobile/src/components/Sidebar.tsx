@@ -382,7 +382,7 @@ export function Sidebar({
   const content = (
     <>
       <View style={styles.head}>
-        <AmpMark size={18} />
+        <AmpMark size={15} />
         <Text style={styles.brand}>AMP</Text>
       </View>
 

@@ -17,7 +17,7 @@ export function ConnectScreen({ errorMessage }: { errorMessage?: string | null }
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <View style={styles.content}>
         <View style={styles.mark}>
-          <AmpMark size={34} />
+          <AmpMark size={40} />
         </View>
         <Text style={styles.brand}>AMP</Text>
         <Text style={styles.headline}>{t("connectHeadline")}</Text>
@@ -54,13 +54,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: space.xl,
   },
+  // The mark carries the accent on its own here, with nothing behind it.
   mark: {
-    width: 64,
-    height: 64,
-    borderRadius: radius.lg,
-    backgroundColor: color.surfaceRaised,
-    alignItems: "center",
-    justifyContent: "center",
     marginBottom: space.lg,
   },
   brand: {

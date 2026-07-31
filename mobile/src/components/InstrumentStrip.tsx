@@ -158,7 +158,7 @@ export function InstrumentStrip({
             hitSlop={8}
             style={styles.brandGroup}
           >
-            <AmpMark size={15} />
+            <AmpMark size={13} />
             <Text style={styles.brand}>AMP</Text>
           </Pressable>
         </View>

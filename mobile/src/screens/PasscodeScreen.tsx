@@ -85,7 +85,7 @@ export function PasscodeScreen({
       >
         <View style={styles.content}>
           <View style={styles.mark}>
-            <AmpMark size={34} />
+            <AmpMark size={40} />
           </View>
           <Text style={styles.brand}>AMP</Text>
           <Text style={styles.headline}>{t("passcodeHeadline")}</Text>
@@ -170,13 +170,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: space.xl,
   },
+  // The mark carries the accent on its own here, with nothing behind it. A
+  // tile around it made the lock screen look like an app-store listing.
   mark: {
-    width: 64,
-    height: 64,
-    borderRadius: radius.lg,
-    backgroundColor: color.surfaceRaised,
-    alignItems: "center",
-    justifyContent: "center",
     marginBottom: space.lg,
   },
   brand: {

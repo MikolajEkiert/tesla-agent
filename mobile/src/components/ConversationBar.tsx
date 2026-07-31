@@ -12,8 +12,8 @@ export type ConversationPhase = "listening" | "thinking" | "speaking";
  *
  * Kept as its own button rather than folded into the microphone: overloading a
  * control that already ships is how existing muscle memory gets a new,
- * unannounced side effect. It wears the app's own mark, because a conversation
- * with Amp is the thing Amp is for.
+ * unannounced side effect. Three bars at the heights a voice makes, which is
+ * this control's own shape and nothing else's.
  */
 export function ConversationButton({
   onPress,

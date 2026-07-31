@@ -1,45 +1,38 @@
 import React from "react";
-import { StyleSheet, View } from "react-native";
-import { color, radius } from "../theme";
+import { View } from "react-native";
+import { color } from "../theme";
 
 /**
- * The app's mark: three bars at the heights a voice makes.
+ * The mark: a tilted block in the brand colour.
  *
- * It replaced a tilted square that stood for a lightning bolt without looking
- * like one. This is the same shape as the button that starts a conversation,
- * which is the honest thing for an assistant you mostly talk to — the mark and
- * the main action share a form, so one teaches the other.
+ * Briefly replaced by three bars at the heights a voice makes, on the argument
+ * that an assistant you talk to should wear its microphone. The bolt is what
+ * the owner wants, and it is the better call anyway — the bars were the
+ * conversation button's glyph, so the mark and a control were saying the same
+ * thing in the same shape, and neither got to mean anything on its own.
+ *
+ * Kept as a component rather than a style so the tilt, the radius and the
+ * colour stay identical everywhere it appears — at 15 points beside the
+ * wordmark and at 40 on the lock screen.
  */
 export function AmpMark({
-  size = 28,
+  size = 40,
   tone = color.brand,
 }: {
   size?: number;
-  /** Overridden on the lock screen, where the mark carries the accent alone. */
   tone?: string;
 }) {
-  const bar = Math.max(2, Math.round(size * 0.13));
-  const heights = [0.42, 1, 0.66];
   return (
-    <View style={[styles.row, { height: size, gap: bar * 0.85 }]}>
-      {heights.map((scale, i) => (
-        <View
-          key={i}
-          style={{
-            width: bar,
-            height: size * scale,
-            borderRadius: radius.pill,
-            backgroundColor: tone,
-          }}
-        />
-      ))}
-    </View>
+    <View
+      style={{
+        width: size,
+        height: size,
+        backgroundColor: tone,
+        // Scaled with the mark: a fixed radius turns a 15-point block into a
+        // circle and leaves a 40-point one looking square.
+        borderRadius: Math.max(2, size * 0.2),
+        transform: [{ rotate: "12deg" }],
+      }}
+    />
   );
 }
-
-const styles = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-});
