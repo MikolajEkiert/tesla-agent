@@ -71,6 +71,28 @@ tesla-amp.duckdns.org {
 	handle /personas* {
 		reverse_proxy api:8000
 	}
+	# --- how long the browser may keep the app -----------------------------
+	#
+	# Nothing said anything about caching before this, and "nothing" is not the
+	# same as "don't cache": with only an ETag and a Last-Modified to go on, a
+	# browser falls back to heuristic freshness — commonly a tenth of the file's
+	# age — so the longer a build sat deployed, the longer a phone was entitled
+	# to keep serving it without ever asking. That is the whole of why a deploy
+	# did not reach an installed PWA.
+	#
+	# The asset names carry a hash of their own contents, so they can be kept
+	# for as long as a browser likes: a changed file is a different name, and
+	# the old name is never requested again.
+	@hashed path /_expo/static/* /assets/*
+	header @hashed Cache-Control "public, max-age=31536000, immutable"
+
+	# And the handful of files that are fetched by a fixed name have to be
+	# re-read, or nothing above is ever noticed. "no-cache" is not "no-store":
+	# the copy is kept and revalidated, so the usual answer is a 304 costing a
+	# few hundred bytes, not a fresh download of the app.
+	@byname path / /index.html /manifest.json /favicon.ico /apple-touch-icon.png /icons/*
+	header @byname Cache-Control "no-cache"
+
 	handle {
 		reverse_proxy frontend:80
 	}

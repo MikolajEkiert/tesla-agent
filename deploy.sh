@@ -54,6 +54,18 @@ sudo chown -R 10001:10001 ~/tesla-agent/backend/data
 sudo chmod 700 ~/tesla-agent/backend/data
 
 cd ~/tesla-agent/deploy
+
+# A Caddyfile that does not parse takes the whole site down, and it does it at
+# the worst moment: the recreate below has already stopped the container that
+# was serving perfectly well, so the failure arrives as "site unreachable"
+# rather than as an error about a config file. Checking first costs one
+# container start against an image that is already local.
+if ! sudo docker run --rm -v ~/tesla-agent/deploy/Caddyfile:/etc/caddy/Caddyfile:ro \
+        caddy:2 caddy validate --config /etc/caddy/Caddyfile; then
+    echo "❌ Caddyfile is invalid — leaving the running proxy untouched."
+    exit 1
+fi
+
 sudo docker compose up -d --build
 # Caddyfile is bind-mounted (no `build:` step for caddy), so `up -d --build`
 # never recreates that container on its own — and a plain `caddy reload`

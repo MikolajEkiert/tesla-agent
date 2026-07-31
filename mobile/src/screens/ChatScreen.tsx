@@ -49,6 +49,7 @@ import {
   titleFor,
 } from "../chats";
 import { greetingParts } from "../i18n";
+import { applyNewBuild, watchForNewBuild } from "../update";
 import { useLanguage } from "../LanguageContext";
 import {
   DEFAULT_PERSONA,
@@ -539,6 +540,49 @@ export function ChatScreen({
       liveRef.current?.stop();
     };
   }, [refreshVehicle, refreshScheduled]);
+
+  // --- taking a newer build ---------------------------------------------
+  //
+  // There is no service worker here, so nothing swaps the app out underneath
+  // itself; what src/update.ts does is notice that the static host is serving
+  // a different bundle than the one running, and this decides when that is
+  // allowed to matter.
+  //
+  // The answer is: when the app is picked up again, and only if nothing is in
+  // progress. Two reasons for waiting rather than reloading on the spot. The
+  // composer keeps its own draft and this screen cannot see it, so a reload
+  // mid-sentence would throw away something the driver typed; and a page that
+  // reloads while being read is indistinguishable, from the passenger seat,
+  // from a crash. Coming back from the home screen is neither.
+  const idleForReloadRef = useRef(true);
+  useEffect(() => {
+    idleForReloadRef.current =
+      !pending &&
+      !speaking &&
+      !conversationActive &&
+      liveRef.current === null &&
+      // A parked command is the one thing on screen that expires: reloading
+      // would leave the driver looking for a card that is no longer there.
+      !items.some((item) => item.kind === "confirm");
+  });
+
+  useEffect(() => {
+    let ready = false;
+    const stop = watchForNewBuild(() => {
+      ready = true;
+    });
+    if (Platform.OS !== "web" || typeof document === "undefined") return stop;
+    const onVisible = () => {
+      if (ready && document.visibilityState === "visible" && idleForReloadRef.current) {
+        applyNewBuild();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   /** Silence it and settle the UI. Every route to "stop talking" goes through
    *  here, so the stop button can never outlive the speech it belongs to —
