@@ -296,25 +296,6 @@ export class VoiceRecorder {
   async start(): Promise<void> {
     if (!voiceInputSupported()) throw new VoiceUnavailableError("no microphone API");
 
-    // The context is built and resumed first, before anything is awaited.
-    //
-    // iOS only honours resume() while the tap that led here is still the
-    // current user gesture, and awaiting getUserMedia spends it — the
-    // permission prompt, or merely the round trip on an already-granted
-    // permission, ends the gesture. Resuming afterwards is a coin toss: it
-    // either rejects outright or leaves a context that says "running" and
-    // delivers silent frames. Both were reachable from one tap of the
-    // microphone on a phone where the same build worked on a laptop.
-    const Ctor = window.AudioContext || (window as any).webkitAudioContext;
-    try {
-      this.context = new Ctor({ sampleRate: SAMPLE_RATE });
-    } catch {
-      // iOS refuses a forced rate rather than resampling. The recorder handles
-      // whatever it gets and resamples on the way out (see stop()).
-      this.context = new Ctor();
-    }
-    if (this.context!.state === "suspended") await this.context!.resume();
-
     this.stream = await openMicrophone();
 
     // cancel() may have run while that was pending — a conversation ended, the
@@ -325,10 +306,21 @@ export class VoiceRecorder {
     if (this.stopping) {
       this.stream.getTracks().forEach((track) => track.stop());
       this.stream = null;
-      void this.context!.close().catch(() => {});
-      this.context = null;
       throw new VoiceUnavailableError("cancelled before it started");
     }
+
+    // At whatever rate the hardware runs. Asking for 16 kHz is how this broke
+    // on the phone: Safari accepts the constructor and then refuses to attach
+    // a microphone to the result, because it will not resample across that
+    // join — createMediaStreamSource throws InvalidStateError, on a build that
+    // is fine in Chrome, which honours the request outright.
+    //
+    // Nothing downstream cares any more. stop() resamples to 16 kHz on the way
+    // out, and the speech classifier is told the rate it is looking at, since
+    // its thresholds are only meaningful at the rate they were measured at.
+    const Ctor = window.AudioContext || (window as any).webkitAudioContext;
+    this.context = new Ctor();
+    if (this.context!.state === "suspended") await this.context!.resume();
 
     this.chunks = [];
     this.frames = 0;
@@ -340,7 +332,7 @@ export class VoiceRecorder {
     this.pendingBlock = null;
     this.onsetStartAt = null;
     this.onsetFired = false;
-    this.source = await this.attachSource();
+    this.source = this.context!.createMediaStreamSource(this.stream);
     this.node = await this.buildNode();
     this.source.connect(this.node);
     // Safari will not pull frames through a node that reaches no destination.
@@ -350,32 +342,6 @@ export class VoiceRecorder {
     mute.gain.value = 0;
     this.node.connect(mute);
     mute.connect(this.context!.destination);
-  }
-
-  /**
-   * Connect the microphone to the graph, giving up the preferred rate if that
-   * is what it takes.
-   *
-   * Safari will not attach a stream to a context running at a rate the
-   * hardware did not choose: `new AudioContext({sampleRate: 16000})` is
-   * accepted, and then createMediaStreamSource throws InvalidStateError — the
-   * error the owner saw on the phone, instantly, on a build that worked on a
-   * laptop. Chrome accepts 16 kHz outright and never reaches the fallback.
-   *
-   * Rebuilding at the hardware rate costs nothing downstream: stop() already
-   * resamples to 16 kHz on the way out, and the classifier is told the rate it
-   * is actually looking at (see analyse).
-   */
-  private async attachSource(): Promise<MediaStreamAudioSourceNode> {
-    try {
-      return this.context!.createMediaStreamSource(this.stream!);
-    } catch {
-      const Ctor = window.AudioContext || (window as any).webkitAudioContext;
-      await this.context!.close().catch(() => {});
-      this.context = new Ctor();
-      if (this.context!.state === "suspended") await this.context!.resume();
-      return this.context!.createMediaStreamSource(this.stream!);
-    }
   }
 
   private async buildNode(): Promise<AudioNode> {

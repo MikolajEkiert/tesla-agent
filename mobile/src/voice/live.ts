@@ -579,12 +579,20 @@ export class LiveSession {
   // --- microphone -------------------------------------------------------
 
   private async startCapture(): Promise<void> {
+    // At the hardware's own rate, never a requested one.
+    //
+    // Asking for INPUT_RATE looks harmless — the constructor accepts it on
+    // every browser — but Safari then refuses to attach a microphone to the
+    // result and throws InvalidStateError from createMediaStreamSource below,
+    // because it will not resample across that join. That is the error that
+    // made the conversation button unusable on the phone while the same build
+    // worked in Chrome.
+    //
+    // Nothing is lost: the frames are resampled to INPUT_RATE before they are
+    // sent (see the resample call in the capture path), which this file has
+    // done since it stopped trusting the requested rate.
     const Ctor = window.AudioContext || (window as any).webkitAudioContext;
-    try {
-      this.inputContext = new Ctor({ sampleRate: INPUT_RATE });
-    } catch {
-      this.inputContext = new Ctor();
-    }
+    this.inputContext = new Ctor();
     if (this.inputContext!.state === "suspended") await this.inputContext!.resume();
 
     this.source = this.inputContext!.createMediaStreamSource(this.stream!);

@@ -127,7 +127,18 @@ export function VoiceButton({
 
   const release = useCallback(() => {
     releasedRef.current = true;
-    if (recorderRef.current) void finish();
+    if (recorderRef.current) {
+      void finish();
+      return;
+    }
+    // Let go before start() handed anything back. The button was showing
+    // "recording" from the moment it was pressed — which is right, because the
+    // alternative is a control that looks dead while a permission sheet is up —
+    // but if start() never resolves, that state had no way out and the button
+    // stayed lit through releasing it, tapping it, everything. Nothing is
+    // recording yet, so the honest thing is to stop saying so; start() sees
+    // this flag when it eventually settles and tears itself down.
+    setPhase("idle");
   }, [finish]);
 
   if (!voiceInputSupported()) return null;
