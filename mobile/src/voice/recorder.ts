@@ -31,39 +31,20 @@ export class VoiceUnavailableError extends Error {}
 export class NothingRecordedError extends Error {}
 
 /**
- * Get a microphone, asking for less if the browser objects to the details.
+ * The one door to the microphone, for this file and for live.ts.
  *
- * The tuned request is the one worth having: one channel, echo cancellation on
- * (barge-in depends on it), noise suppression on (a car is loud). Chrome takes
- * all three and so does desktop Safari.
- *
- * iOS does not, reliably. `channelCount` and `noiseSuppression` are the two it
- * has historically refused outright rather than ignored, and a refused
- * constraint is an OverconstrainedError thrown before any permission prompt —
- * which is why this failed the instant the button was pressed, on a phone that
- * had already granted access, while the same build worked on a laptop.
- *
- * So the constraints are treated as a preference rather than a requirement: if
- * the detailed request is refused for any reason other than the owner saying
- * no, ask again for a plain microphone. A mono 16 kHz stream is what the
- * recorder wants, but a stereo 48 kHz one it downmixes is infinitely better
- * than no microphone at all.
+ * One channel, echo cancellation on (barge-in depends on it), noise suppression
+ * on (a car is loud). Shared rather than written twice because the two paths
+ * had drifted, and the drift is how a fix landed in one of them and not the
+ * other for a whole afternoon.
  */
 export async function openMicrophone(): Promise<MediaStream> {
   // Before anything else: a page whose audio session is still set to `playback`
   // — which primeSpeech() declares from this very tap — cannot capture at all.
   prepareForCapture();
-  try {
-    return await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-    });
-  } catch (e) {
-    // A refusal is a refusal — asking again in a plainer voice will not change
-    // the owner's mind, and retrying would only produce a second prompt.
-    const name = e instanceof Error ? e.name : "";
-    if (name === "NotAllowedError" || name === "SecurityError") throw e;
-    return await navigator.mediaDevices.getUserMedia({ audio: true });
-  }
+  return await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+  });
 }
 
 export function voiceInputSupported(): boolean {
