@@ -203,3 +203,35 @@ export const SPEECH_EVIDENCE: SpeechEvidence = {
   // to raise, at the cost of one-word answers like "nie" being dropped.
   minConsonantMs: 4,
 };
+
+/**
+ * How long somebody actually spoke, from the first sound shaped like speech to
+ * the last.
+ *
+ * The buffer this reads is the whole listening window: the microphone is open
+ * from the moment the assistant stops talking, so most of it is a car with
+ * nobody saying anything. Reporting its length as "you spoke for N seconds"
+ * would count the pause before the sentence and the one after it — a driver
+ * who waits, says "tak", and waits again would be told they spoke for eight
+ * seconds.
+ *
+ * So it is a span rather than a total, and the ends are found with the same
+ * classifier the recorder gates on, at the thresholds measured for it. A span
+ * keeps the pauses *inside* a sentence, which is what a person means by how
+ * long they spoke; a total of in-band blocks would report the vowels alone and
+ * come out absurdly short.
+ *
+ * Zero when nothing in the buffer was speech-shaped at all.
+ */
+export function speechSpanMs(samples: Float32Array, rate: number = PROFILE_RATE): number {
+  let first = -1;
+  let last = -1;
+  for (let start = 0; start + BLOCK_SIZE <= samples.length; start += HOP_SIZE) {
+    const block = samples.subarray(start, start + BLOCK_SIZE);
+    if (!classifyBlock(block, VOICE_PROFILE, rate).inBand) continue;
+    if (first < 0) first = start;
+    last = start + BLOCK_SIZE;
+  }
+  if (first < 0) return 0;
+  return ((last - first) / rate) * 1000;
+}

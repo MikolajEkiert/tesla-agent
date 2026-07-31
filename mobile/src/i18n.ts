@@ -186,6 +186,12 @@ const STRINGS = {
     personaCustomDeleteBody: "It's removed from this device for good.",
     // What gets appended to a note, named in the owner's language. The server
     // sends ids; these are the words for them.
+    // A spoken turn, said rather than typed. English needs two forms; Polish
+    // needs three and a rule — see spokenFor below.
+    spokeShort: "You spoke for less than a second",
+    spokeOne: "You spoke for {n} second",
+    spokeFew: "You spoke for {n} seconds",
+    spokeMany: "You spoke for {n} seconds",
     personaAdditions: "Amp will fill in: {items}.",
     personaAdditionTerse: "reading it as a register rather than a catchphrase",
     personaAdditionLength: "keeping to a sentence or two",
@@ -364,6 +370,10 @@ const STRINGS = {
     personaCustomFull: "Tyle Amp przechowuje. Usuń jeden, żeby dodać kolejny.",
     personaCustomDeleteTitle: "Usunąć ten charakter?",
     personaCustomDeleteBody: "Zniknie z tego urządzenia na dobre.",
+    spokeShort: "Mówiłeś krócej niż sekundę",
+    spokeOne: "Mówiłeś przez {n} sekundę",
+    spokeFew: "Mówiłeś przez {n} sekundy",
+    spokeMany: "Mówiłeś przez {n} sekund",
     personaAdditions: "Amp dopisze: {items}.",
     personaAdditionTerse: "potraktowanie tego jako stylu, nie powiedzonka",
     personaAdditionLength: "trzymanie się jednego–dwóch zdań",
@@ -414,6 +424,33 @@ export function t(
   return template.replace(/\{(\w+)\}/g, (match, name) =>
     name in vars ? String(vars[name]) : match
   );
+}
+
+/**
+ * "You spoke for four seconds", in a language that declines the noun.
+ *
+ * Polish needs three forms and a rule, not a plural flag: 1 sekundę, 2–4
+ * sekundy, 5+ sekund — and then 22 sekundy again, but 12 sekund, because the
+ * teens are exceptions. English takes the same shape with two of the three
+ * branches saying the same thing, which is cheaper than a second code path.
+ *
+ * Rounded, never floored: a turn of 0.6 s must not read as "0 seconds", and a
+ * turn under half a second gets its own line rather than a number at all —
+ * "less than a second" is both true and the only honest thing to say about a
+ * measurement that fine.
+ */
+export function spokenFor(language: Language, seconds: number): string {
+  const n = Math.round(seconds);
+  if (!Number.isFinite(seconds) || n < 1) return t(language, "spokeShort");
+  const tens = n % 100;
+  const unit = n % 10;
+  const key =
+    n === 1
+      ? "spokeOne"
+      : unit >= 2 && unit <= 4 && !(tens >= 12 && tens <= 14)
+      ? "spokeFew"
+      : "spokeMany";
+  return t(language, key, { n });
 }
 
 /**

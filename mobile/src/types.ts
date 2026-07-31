@@ -16,6 +16,11 @@ export type ChatItem =
       role: Role;
       text: string;
     }
+  // Something was said out loud in a live conversation. Deliberately carries
+  // no text: the session's transcript of the driver is a second recogniser the
+  // model never reads, so quoting it records words nobody said. The length is
+  // the part this side actually knows. See LiveHandlers.onUserSpoke.
+  | { kind: "voice"; id: string; seconds: number }
   | { kind: "tool"; id: string; call: ToolCall }
   // A physically consequential command the assistant proposed; only a tap on
   // this row executes it (see components/ConfirmCard.tsx).

@@ -141,15 +141,28 @@ SPOKEN_INSTRUCTION = (
     "klimatyzację?'. 'Nie' to that declines the task, not the conversation: "
     "acknowledge it in a few words and then ask, once, whether they need "
     "anything else. "
+    # The tool is described, never named.
+    #
+    # It used to be named — "call end_conversation in the same turn" — and
+    # twice in one drive the model read that identifier out loud instead of
+    # calling anything: "No to cześć, szerokiej drogi! end_conversation", with
+    # the session still listening afterwards, because a spoken name closes
+    # nothing. A native-audio model turns its instructions into speech for a
+    # living, and an identifier printed five times in those instructions is a
+    # word it has been taught to say. The declaration below still carries the
+    # name, which is where a name belongs; the prose no longer does. The client
+    # also treats a spoken one as the call it was meant to be (see flushSaid in
+    # mobile/src/voice/live.ts), because a prompt is guidance and that is a net.
     "The other is that closing question itself — 'Czy mogę pomóc w czymś "
     "jeszcze?'. 'Nie' to that does end the conversation: say one short line of "
-    "farewell and call end_conversation in the same turn. "
+    "farewell and, in the same turn, use the tool that closes the conversation "
+    "— use it, never say its name aloud. "
     "Ask the closing question when what you were doing is finished and nothing "
     "is outstanding — not after every sentence, and never twice in a row. If "
     "they answer it with another request, deal with the request and do not ask "
     "again until the next lull. "
     "A plain goodbye needs no closing question at all: 'to wszystko', 'dzięki, "
-    "koniec', 'pa', 'nara' — say the farewell and call end_conversation "
+    "koniec', 'pa', 'nara' — say the farewell and use that same closing tool "
     "straight away. "
     "Having answered a question is never itself a reason to end. After you "
     "have given the range, found a charger or set the navigation, stay "

@@ -25,6 +25,9 @@ const stubs = {
   "../api": { fetchLiveToken: async () => ({}), runLiveTool: async () => ({ ok: true }) },
   "./audioSession": { prepareForCapture() {} },
   "./recorder": { encodeWav: () => null, openMicrophone: async () => null },
+  // Measuring the turn is somebody else's tested job (src/voice/vad.ts); here
+  // it only has to answer, so a flushed turn does not throw.
+  "./vad": { speechSpanMs: () => 2000 },
 };
 
 const js = ts.transpileModule(fs.readFileSync(SRC, "utf8"), {
@@ -68,10 +71,10 @@ function finishPlayback() {
 }
 
 function newSession() {
-  const events = { concluded: 0, idle: 0, phases: [] };
+  const events = { concluded: 0, idle: 0, phases: [], spoke: [], said: [] };
   const session = new LiveSession({
-    onUserTranscript: () => {},
-    onAssistantTranscript: () => {},
+    onUserSpoke: (seconds) => events.spoke.push(seconds),
+    onAssistantTranscript: (text) => events.said.push(text),
     onTool: () => {},
     onConcluded: () => events.concluded++,
     onPhase: (p) => events.phases.push(p),
@@ -181,7 +184,51 @@ async function answerIsNotAFarewell() {
     `last phase was ${events.phases[events.phases.length - 1]}`);
 }
 
+async function spokenInsteadOfCalled() {
+  // Measured in the car, twice in one drive: the model read the tool's name
+  // out loud at the end of its farewell and then carried on listening, because
+  // a spoken name calls nothing. The prompt no longer prints that identifier;
+  // this is the net underneath it.
+  console.log("\nthe model says the tool's name instead of calling it");
+  const { session, events } = newSession();
+  await feed(session, heard("Nie."));
+  await feed(session, said("No to cześć, szerokiej drogi! end_conversation"));
+  await feed(session, turnComplete());
+  finishPlayback();
+  check("it closes anyway", events.concluded === 1,
+    `onConcluded fired ${events.concluded} times`);
+  check("and the identifier is not shown to the driver",
+    events.said.length === 1 && !/end_conversation/.test(events.said[0]),
+    `logged ${JSON.stringify(events.said)}`);
+  check("the farewell itself survives",
+    /szerokiej drogi/i.test(events.said[0] ?? ""), `logged ${JSON.stringify(events.said)}`);
+}
+
+async function spokenTurnIsADuration() {
+  // The driver's turn is a length now, never a transcript.
+  console.log("\na spoken turn reaches the app as a duration");
+  const { session, events } = newSession();
+  // A turn with audio in it: the length is measured from what was captured,
+  // and a turn that captured nothing is reported as zero rather than guessed.
+  session.keepTurnAudio(new Float32Array(16000));
+  await feed(session, heard("Wybierz trasę do najbliższego Orlenu."));
+  await feed(session, said("Jasne."));
+  check("one spoken turn, reported in seconds", events.spoke.length === 1 && events.spoke[0] === 2,
+    `got ${JSON.stringify(events.spoke)}`);
+  check("and none of what it thought it heard travels with it",
+    !JSON.stringify(events.spoke).includes("Orlen"));
+  const quiet = newSession();
+  await feed(quiet.session, heard("Tak."));
+  // The turn is handed up when the assistant starts answering, so the answer
+  // is what makes it flush — same as above, minus the captured audio.
+  await feed(quiet.session, said("Jasne."));
+  check("a turn with no audio is zero, not a guess", quiet.events.spoke[0] === 0,
+    `got ${JSON.stringify(quiet.events.spoke)}`);
+}
+
 (async () => {
+  await spokenInsteadOfCalled();
+  await spokenTurnIsADuration();
   await farewellFirst();
   await farewellStillPlaying();
   await requestFirst();

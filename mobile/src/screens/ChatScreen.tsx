@@ -64,6 +64,7 @@ import {
 } from "../persona";
 import { SettingsScreen } from "./SettingsScreen";
 import { SuggestionChips } from "../components/SuggestionChips";
+import { VoiceNoteRow } from "../components/VoiceNoteRow";
 import { color, font, radius, READING_WIDTH, space, type, WIDE_LAYOUT } from "../theme";
 import {
   DEFAULT_SPEECH_MODE,
@@ -1283,49 +1284,20 @@ export function ChatScreen({
         enterPhase(phase);
         setSpeaking(phase === "speaking");
       },
-      onUserTranscript: (text, audio) => {
-        // Two transcripts of the same words, shown in the order they arrive.
+      onUserSpoke: (seconds) => {
+        // A note that somebody spoke, not a guess at what they said.
         //
-        // The session's own is instant and blind — a general recogniser with no
-        // language, no vocabulary and no context, which is why "Supercharger"
-        // came out as "super czarny". It goes up straight away so the row
-        // appears while the assistant is already answering.
+        // The session's transcript of the driver is a second recogniser that
+        // the model itself never reads, and it is wrong in the way that
+        // matters: it wrote "najbliższego Superchargera" over a correctly
+        // heard "Orlenu" while the assistant answered about the petrol station
+        // perfectly. Quoting it made the log a record of things nobody said —
+        // and gave the driver no way to tell a mishearing from a misreading.
+        // What is left is the one thing this side knows for certain.
         //
-        // Then the same audio goes to /voice/transcribe, which knows the
-        // language and the car's vocabulary, and the row is quietly corrected
-        // in place. One extra request per spoken turn, on its own daily budget
-        // (GEMINI_TRANSCRIBE_MODEL), and purely cosmetic: the assistant heard
-        // the audio itself and has already acted. If this fails — no signal, a
-        // spent quota — the first transcript simply stays, which is exactly
-        // what was there before.
-        //
-        // The rough transcript goes with the audio, and that is not a detail.
-        // Without it the correction was a second blind guess by a call whose
-        // whole instruction is car vocabulary, and it corrected "najbliższego
-        // Orlenu" — heard correctly here — into "najbliższego Superchargera",
-        // while the assistant drove to the petrol station it had understood
-        // perfectly well. Measured 6/6 with the old wording. Sent as evidence,
-        // this text anchors the names and the audio still overrules it
-        // everywhere it is clear.
-        const rowId = id();
-        appendItems([{ kind: "message", id: rowId, role: "user", text }]);
-        if (!audio) return;
-        void transcribe(audio, language, text)
-          .then((better) => {
-            const clean = better.trim();
-            if (!clean || clean === text) return;
-            setItems((prev) =>
-              prev.map((item) =>
-                item.kind === "message" && item.id === rowId
-                  ? { ...item, text: clean }
-                  : item
-              )
-            );
-          })
-          .catch(() => {
-            // The heard-it-roughly version is the fallback, and it is already
-            // on screen.
-          });
+        // Typed messages and the recordings path are untouched: there the text
+        // *is* the command, produced by the model that acts on it.
+        appendItems([{ kind: "voice", id: id(), seconds }]);
       },
       onAssistantTranscript: (text) => {
         appendItems([{ kind: "message", id: id(), role: "assistant", text }]);
@@ -1564,6 +1536,8 @@ export function ChatScreen({
                       item.role === "user" ? () => void handleSend(item.text) : undefined
                     }
                   />
+                ) : item.kind === "voice" ? (
+                  <VoiceNoteRow seconds={item.seconds} />
                 ) : item.kind === "confirm" ? (
                   <ConfirmCard
                     token={item.token}

@@ -36,7 +36,8 @@ import { prepareForCapture } from "./audioSession";
 // The same door the recorder uses, so both paths declare the session and
 // survive a refused constraint identically. Two ways of opening a microphone
 // is how one of them ends up with a fix the other never got.
-import { encodeWav, openMicrophone } from "./recorder";
+import { openMicrophone } from "./recorder";
+import { speechSpanMs } from "./vad";
 
 /**
  * Not the endpoint the Live documentation shows, and the difference is the
@@ -90,6 +91,11 @@ const IDLE_TIMEOUT_MS = 30_000;
  *  side — see runTools. Never sent to /live/tool: it does nothing to the car. */
 const END_CONVERSATION_TOOL = "end_conversation";
 
+/** The same name as it comes out of a model that spoke it instead of calling
+ *  it. Bare word, so a sentence merely containing it inside another token is
+ *  left alone. */
+const SPOKEN_TOOL_NAME = new RegExp(`\\b${END_CONVERSATION_TOOL}\\b`, "gi");
+
 /** How long a session that asked to close waits for the closing line before
  *  giving up on it. Covers generating and speaking one short sentence. */
 const END_GRACE_MS = 8000;
@@ -131,19 +137,20 @@ export type LivePhase = "listening" | "thinking" | "speaking";
 
 export interface LiveHandlers {
   /**
-   * The driver said something, and this is what the session made of it —
-   * plus the audio it made it from.
+   * The driver finished saying something, and this is how long they spoke for.
    *
-   * Both, because they are not the same quality. The session's transcript
-   * arrives instantly and is a general recogniser working blind; the audio can
-   * be sent to the tuned transcription path, which knows the language and the
-   * car vocabulary, and comes back right. The caller shows the first and
-   * quietly replaces it with the second.
+   * Not what they said, and that is the change. The session transcribes the
+   * driver on a second, weaker channel that the model itself never reads —
+   * measured in the car, it wrote "najbliższego Superchargera" over a
+   * correctly-heard "Orlenu" while the assistant answered about the petrol
+   * station perfectly well. A row that quotes that channel is a record of
+   * something nobody said. A duration is small, true, and cannot be wrong
+   * about a word.
    *
-   * `audio` is null when nothing was captured — a turn ended by a tool call
-   * with no speech in it, or a session that has only just opened.
+   * Zero is possible and means the turn held no speech-shaped audio at all —
+   * the caller decides how to say "less than a second".
    */
-  onUserTranscript: (text: string, audio: Blob | null) => void;
+  onUserSpoke: (seconds: number) => void;
   /** The assistant said something, and this is what it was. */
   onAssistantTranscript: (text: string) => void;
   /** A tool ran (or refused to). Drives the instrument log and the cards. */
@@ -609,6 +616,25 @@ export class LiveSession {
    * Every route out of a turn comes through here, because which one arrives
    * last depends on the network.
    */
+  /** The conversation has been asked to end — by the tool, or by the model
+   *  reading the tool's name out loud instead of calling it. Both mean the
+   *  same thing and both have to survive the goodbye still being spoken. */
+  private requestEnd(): void {
+    this.endAfterReply = true;
+    // Already said, if the farewell led and the request followed — which is
+    // the ordinary case, not the exception. Starting this at false and
+    // waiting for audio that has already played is what left the microphone
+    // open for the whole of END_GRACE_MS after "do usłyszenia".
+    this.endSpoke = this.spokeThisTurn;
+    // A model that asks to close and then says nothing would leave the
+    // microphone open indefinitely, waiting for a goodbye that is never
+    // coming. Long enough to cover generating and speaking one short line.
+    if (this.endTimer) clearTimeout(this.endTimer);
+    this.endTimer = setTimeout(() => {
+      if (!this.closed && !this.endSpoke) this.conclude();
+    }, END_GRACE_MS);
+  }
+
   private maybeSettle(): void {
     if (this.playingSources > 0 || !this.turnEnded) return;
     this.speaking = false;
@@ -691,19 +717,7 @@ export class LiveSession {
       // the goodbye with it. The flag is spent when the reply has finished
       // playing.
       if (call.name === END_CONVERSATION_TOOL) {
-        this.endAfterReply = true;
-        // Already said, if the farewell led and the request followed — which is
-        // the ordinary case, not the exception. Starting this at false and
-        // waiting for audio that has already played is what left the microphone
-        // open for the whole of END_GRACE_MS after "do usłyszenia".
-        this.endSpoke = this.spokeThisTurn;
-        // A model that asks to close and then says nothing would leave the
-        // microphone open indefinitely, waiting for a goodbye that is never
-        // coming. Long enough to cover generating and speaking one short line.
-        if (this.endTimer) clearTimeout(this.endTimer);
-        this.endTimer = setTimeout(() => {
-          if (!this.closed && !this.endSpoke) this.conclude();
-        }, END_GRACE_MS);
+        this.requestEnd();
         responses.push({ id: call.id, name: call.name, response: { result: "ok" } });
         continue;
       }
@@ -749,8 +763,10 @@ export class LiveSession {
   }
 
   /** Hold on to the driver's audio, oldest dropped once the cap is reached —
-   *  a turn that has run half a minute is no longer the sentence we want. */
-  private keepForTranscription(samples: Float32Array): void {
+   *  a turn that has run half a minute is no longer the sentence we want.
+   *  Kept only to be measured now (see takeTurnSpeechSeconds); nothing is
+   *  transcribed from it any more. */
+  private keepTurnAudio(samples: Float32Array): void {
     this.turnAudio.push(samples);
     this.turnSamples += samples.length;
     const cap = INPUT_RATE * MAX_TURN_SECONDS;
@@ -764,14 +780,16 @@ export class LiveSession {
     this.turnSamples = 0;
   }
 
-  /** The turn's audio as a WAV, and the buffer emptied. Null when there is too
-   *  little to be a sentence — the server would reject it as silence anyway,
-   *  and a request spent finding that out is a request wasted. */
-  private takeTurnAudio(): Blob | null {
+  /** How long the driver spoke in this turn, and the buffer emptied.
+   *
+   *  The span of speech in the buffer rather than the buffer's own length: the
+   *  microphone is open from the moment the assistant stops talking, so most
+   *  of what is held here is a quiet car. See speechSpanMs. */
+  private takeTurnSpeechSeconds(): number {
     const samples = this.turnSamples;
     const chunks = this.turnAudio;
     this.clearTurnAudio();
-    if (samples < INPUT_RATE * 0.3) return null;
+    if (!samples) return 0;
 
     const merged = new Float32Array(samples);
     let offset = 0;
@@ -779,20 +797,37 @@ export class LiveSession {
       merged.set(chunk, offset);
       offset += chunk.length;
     }
-    return encodeWav(merged, INPUT_RATE);
+    return speechSpanMs(merged, INPUT_RATE) / 1000;
   }
 
   private flushHeard(): void {
+    // The session's own transcript is still what tells us a turn happened —
+    // it is the only signal that says "that was speech, not the road". What it
+    // says is discarded; only the fact of it, and the length of it, travel up.
     const text = this.heard.trim();
     this.heard = "";
     if (!text) return;
-    this.handlers.onUserTranscript(text, this.takeTurnAudio());
+    this.handlers.onUserSpoke(this.takeTurnSpeechSeconds());
   }
 
   private flushSaid(): void {
     const text = this.said.trim();
     this.said = "";
-    if (text) this.handlers.onAssistantTranscript(text);
+    if (!text) return;
+
+    // Said instead of called.
+    //
+    // Twice in one drive the assistant read the tool's name out loud — "No to
+    // cześć, szerokiej drogi! end_conversation" — and carried on listening,
+    // because a spoken name is not a function call and nothing closed the
+    // session. The prompt no longer prints that identifier (see
+    // SPOKEN_INSTRUCTION in backend/app/live.py), which is the cause; this is
+    // the net underneath. An identifier with an underscore is not something a
+    // driver ever hears in a farewell, so treating it as the intent it plainly
+    // was costs nothing, and it must not be shown either way.
+    const spoken = text.replace(SPOKEN_TOOL_NAME, " ").replace(/\s+/g, " ").trim();
+    if (spoken !== text) this.requestEnd();
+    if (spoken) this.handlers.onAssistantTranscript(spoken);
   }
 
   /** Something happened that means somebody is still there. */
@@ -934,7 +969,7 @@ export class LiveSession {
 
     // The context's real rate, not the one that was asked for.
     const samples = resample(merged, rate, INPUT_RATE);
-    this.keepForTranscription(samples);
+    this.keepTurnAudio(samples);
     const pcm = new Int16Array(samples.length);
     for (let i = 0; i < samples.length; i++) {
       const s = Math.max(-1, Math.min(1, samples[i]));

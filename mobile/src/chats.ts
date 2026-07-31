@@ -68,7 +68,14 @@ export function newChatId(): string {
  * naming them after it would produce a list of identical rows.
  */
 export function titleFor(items: ChatItem[]): string {
-  const first = items.find((item) => item.kind === "message" && item.role === "user");
+  // The driver's own words when there are any. A spoken conversation has none:
+  // its turns are durations now, not transcripts, and "Mówiłeś przez 4
+  // sekundy" would name every voice chat the same nonsense. So those fall back
+  // to the first thing the assistant said, which is about the same subject and
+  // is at least a sentence somebody meant.
+  const first =
+    items.find((item) => item.kind === "message" && item.role === "user") ??
+    items.find((item) => item.kind === "message" && item.role === "assistant");
   if (!first || first.kind !== "message") return "";
   const text = first.text.trim().replace(/\s+/g, " ");
   return text.length > MAX_TITLE ? `${text.slice(0, MAX_TITLE - 1)}…` : text;
@@ -82,7 +89,13 @@ export function titleFor(items: ChatItem[]): string {
  * closed again.
  */
 export function isWorthSaving(items: ChatItem[]): boolean {
-  return items.some((item) => item.kind === "message" && item.role === "user");
+  // A spoken turn counts. It carries no text — see the "voice" item in
+  // types.ts — so a conversation held entirely by voice has no user message in
+  // it at all, and testing for one would have thrown away every live
+  // conversation the moment it ended.
+  return items.some(
+    (item) => item.kind === "voice" || (item.kind === "message" && item.role === "user")
+  );
 }
 
 /**
