@@ -167,22 +167,22 @@ export function VoiceButton({
 
 const styles = StyleSheet.create({
   wrap: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     alignItems: "center",
     justifyContent: "center",
   },
   ring: {
     position: "absolute",
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     borderRadius: radius.pill,
     backgroundColor: color.brand,
     opacity: 0.25,
   },
   button: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     borderRadius: radius.pill,
     backgroundColor: color.surfaceHover,
     alignItems: "center",

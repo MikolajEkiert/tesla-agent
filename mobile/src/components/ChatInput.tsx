@@ -215,8 +215,10 @@ const styles = StyleSheet.create({
     gap: space.sm,
   },
   sendButton: {
-    width: 40,
-    height: 40,
+    // See ConversationBar: 44 is the minimum comfortable target, and hitSlop is
+    // not a substitute for it on the web.
+    width: 44,
+    height: 44,
     borderRadius: radius.pill,
     backgroundColor: color.brand,
     alignItems: "center",

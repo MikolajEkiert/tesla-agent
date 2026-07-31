@@ -145,8 +145,12 @@ export function ConversationBar({
 
 const styles = StyleSheet.create({
   entryButton: {
-    width: 40,
-    height: 40,
+    // 44, not 40: hitSlop covers native, but its web support is inconsistent
+    // and the web is where this ships, so the box itself has to be the right
+    // size. Sized down during the redesign for the look of the row, which is
+    // the wrong thing to trade for in a car.
+    width: 44,
+    height: 44,
     borderRadius: radius.pill,
     backgroundColor: color.surfaceHover,
     alignItems: "center",

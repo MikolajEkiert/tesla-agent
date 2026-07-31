@@ -51,6 +51,18 @@ const TOKEN_TTL_S = 120;
  *  clock on a decision that usually takes three seconds. */
 const COUNTDOWN_FROM_S = 45;
 
+/**
+ * Mirrors VOICE_WINDOW_S in backend/app/actions.py.
+ *
+ * The spoken shortcut dies long before the card does: a tap can wait two
+ * minutes because it takes a deliberate finger, but a word only means "yes" for
+ * as long as the driver is still in the exchange that produced the card. The
+ * hint has to go quiet when the shortcut does — offering it for the other 95
+ * seconds means the server answers a perfectly clear "potwierdzam" with a
+ * refusal, and the app then blames the driver for mumbling.
+ */
+const VOICE_WINDOW_S = 25;
+
 function detailOf(tool: string, args: Record<string, unknown> | undefined): string | null {
   const key = DETAIL_ARG[tool];
   if (!key || !args || !(key in args)) return null;
@@ -163,7 +175,9 @@ export function ConfirmCard({
         <Text style={styles.expired}>{t("confirmExpired")}</Text>
       ) : (
         <>
-          {voice && <Text style={styles.voiceHint}>{t("voiceConfirmSpoken")}</Text>}
+          {voice && TOKEN_TTL_S - remaining <= VOICE_WINDOW_S && (
+            <Text style={styles.voiceHint}>{t("voiceConfirmSpoken")}</Text>
+          )}
           {remaining <= COUNTDOWN_FROM_S && (
             <Text style={styles.countdown}>{t("confirmExpiresIn", { n: remaining })}</Text>
           )}
