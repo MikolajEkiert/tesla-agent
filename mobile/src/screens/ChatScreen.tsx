@@ -872,10 +872,22 @@ export function ChatScreen({
     recorder.onLevel = reportLevel;
     recorder.onAutoStop = () => void finishConversationTurn();
     conversationRecorderRef.current = recorder;
-    recorder.start().catch(() => {
-      // Permission revoked mid-conversation, or the device took the mic away
-      // (a phone call arriving). Nothing left to listen with.
+    recorder.start().catch((e) => {
+      // Permission refused or revoked, or the device took the microphone away
+      // (a phone call arriving). Nothing left to listen with — and this has to
+      // say so.
+      //
+      // It used to fail in silence, which is the whole of the bug where the
+      // conversation button "does nothing": the bar appears for the length of
+      // one failed getUserMedia and is gone again before anyone sees it, and
+      // the driver is left tapping a control that gives no sign it was ever
+      // pressed. A refused microphone is an ordinary thing to hit — it is a
+      // browser permission, it is per-site, and Safari forgets it — so it is
+      // worth a sentence rather than a shrug.
       conversationRecorderRef.current = null;
+      const denied =
+        e instanceof Error && (e.name === "NotAllowedError" || e.name === "SecurityError");
+      setError(denied ? t("voiceDenied") : t("voiceFailed"));
       stopConversation();
     });
   };
@@ -1009,7 +1021,9 @@ export function ChatScreen({
         onLocked?.();
       } else {
         // Transcription itself failed (quota, no signal) — stop rather than
-        // spin through the same failure every couple of seconds.
+        // spin through the same failure every couple of seconds, and say why,
+        // or ending mid-conversation looks like the app losing interest.
+        setError(e instanceof BackendError ? e.message : t("voiceFailed"));
         stopConversation();
       }
     }
