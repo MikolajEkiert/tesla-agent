@@ -29,10 +29,16 @@ from google.genai import types
 
 from app.config import get_settings
 
-# From the owner's own rate-limit dashboard: the native-audio model carries the
-# largest token-per-minute allowance of the Live family (1M against 65K), and
-# unlimited requests per day — which is the whole reason this route exists.
-DEFAULT_MODEL = "gemini-2.5-flash-native-audio-dialog"
+# The native-audio family carries the largest token-per-minute allowance of the
+# Live models and unlimited requests per day, which is the whole reason this
+# route exists.
+#
+# The id is not what the rate-limit dashboard shows. That screen prints display
+# names — "Gemini 2.5 Flash Native Audio Dialog" — and a session opened with
+# one is refused as a model that does not exist. The ids come from listing the
+# models that advertise bidiGenerateContent, which is the only trustworthy
+# source for them.
+DEFAULT_MODEL = "gemini-2.5-flash-native-audio-latest"
 
 # Long enough to open a session on a slow mobile connection, short enough that
 # a token found in a log is already dead.

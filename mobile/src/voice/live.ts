@@ -25,8 +25,22 @@ import { Platform } from "react-native";
 import { fetchLiveToken } from "../api";
 import { BLOCK_SIZE, classifyBlock, HOP_SIZE, SPEECH_EVIDENCE } from "./vad";
 
+/**
+ * Not the endpoint the Live documentation shows, and the difference is the
+ * whole reason a first attempt failed.
+ *
+ * An ordinary API key opens `BidiGenerateContent` with `?key=`. An ephemeral
+ * token — which is all a browser should ever hold — opens a *different*
+ * method, `BidiGenerateContentConstrained`, with `?access_token=`, on v1alpha.
+ * Sending a token to the documented endpoint is refused as "unregistered
+ * caller"; sending it as `key=` is refused as an invalid key. Both look like
+ * an authentication mistake and neither says which.
+ *
+ * Found by reading what the official SDK actually puts on the wire after every
+ * documented combination had been tried and rejected.
+ */
 const LIVE_URL =
-  "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
+  "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 
 /** What the API expects on the way in, and what the recorder already makes. */
 const INPUT_RATE = 16000;
@@ -130,8 +144,10 @@ export class LiveSession {
 
   private openSocket(token: string, model: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      // The token goes in the query string as an access_token, which is how
-      // Google's own browser clients pass it; the real key never exists here.
+      // A query parameter rather than a header, which matters more than it
+      // looks: browsers cannot set headers on a WebSocket at all, so a
+      // header-only scheme would have made a direct connection impossible and
+      // forced the audio back through our own server.
       const socket = new WebSocket(`${LIVE_URL}?access_token=${encodeURIComponent(token)}`);
       socket.binaryType = "arraybuffer";
       this.socket = socket;
