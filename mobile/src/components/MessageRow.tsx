@@ -99,7 +99,6 @@ function ActionButton({
 export function MessageRow({
   role,
   text,
-  heard,
   attached,
   showActions,
   reveal,
@@ -108,7 +107,6 @@ export function MessageRow({
 }: {
   role: Role;
   text: string;
-  heard?: boolean;
   /** The turn above this one touched the car, so the rail runs into it. */
   attached?: boolean;
   /** This is the newest turn — its actions stay visible without hovering. */
@@ -156,12 +154,6 @@ export function MessageRow({
           <Text style={styles.userText}>{text}</Text>
         </View>
         <View style={styles.userFooter}>
-          {/* Said, not typed. A live session's transcript is a second, weaker
-              recogniser running alongside the model — it gets words like
-              "Supercharger" wrong while the assistant answers correctly,
-              because the assistant hears the audio and never sees this text.
-              So the row stops claiming to be a quotation. */}
-          {heard && !copied && <Text style={styles.footnote}>{t("heardApprox")}</Text>}
           {copied && <Text style={styles.footnote}>{t("copied")}</Text>}
           {actionsVisible && (
             <>

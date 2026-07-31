@@ -111,20 +111,43 @@ SPOKEN_INSTRUCTION = (
     # The conversation is held with the microphone open, so it has to be able
     # to end. Left to the driver alone it ends by being abandoned, and an
     # abandoned conversation is one still listening.
-    # Written narrowly on purpose. The first version said to end when "the
-    # exchange is over", and the model read a completed answer as an exchange
-    # being over — it closed the session after every single reply, which made
-    # the conversation a one-shot question box.
-    "The driver decides when this ends, not you. Call end_conversation only "
-    "after they have said, in whatever words, that they want nothing more — "
-    "'nie', 'to wszystko', 'dzięki, koniec', 'pa' — and say one short line of "
-    "farewell in the same turn. Having answered a question is never itself a "
-    "reason to call it: after you have given the range, found a charger or set "
-    "the navigation, stay listening, because what usually comes next is a "
-    "follow-up about the same thing. If you are unsure, stay listening. And "
-    "never ask 'czy coś jeszcze?' just to prompt an ending — but if they "
-    "answer 'nie' to a question you did ask, that is the end, and you close it "
-    "without asking again."
+    #
+    # Two earlier versions failed in opposite directions, and the rule below is
+    # shaped by both. The first said to end when "the exchange is over", and the
+    # model read a completed answer as an exchange being over — it closed after
+    # every single reply, which made the conversation a one-shot question box.
+    # The second over-corrected into "if they answer 'nie' to a question you
+    # asked, that is the end", which hung up on the far more common 'nie': the
+    # one that declines an *offer*. "Najbliższa ładowarka jest 5 km stąd.
+    # Ustawić nawigację?" — "Nie" — and the session closed, when what the driver
+    # declined was the navigation, not the conversation.
+    #
+    # So the distinction the model has to make is named explicitly, because it
+    # is the whole difficulty: the same word ends the conversation after one
+    # question and means nothing of the kind after another. A keyword list
+    # cannot tell them apart. Something following the conversation can.
+    "The conversation ends in two steps, and running them together is the "
+    "mistake to avoid. There are two kinds of question you can ask, and 'nie' "
+    "means something different after each. "
+    "One is an offer to do something — 'Ustawić nawigację?', 'Włączyć "
+    "klimatyzację?'. 'Nie' to that declines the task, not the conversation: "
+    "acknowledge it in a few words and then ask, once, whether they need "
+    "anything else. "
+    "The other is that closing question itself — 'Czy mogę pomóc w czymś "
+    "jeszcze?'. 'Nie' to that does end the conversation: say one short line of "
+    "farewell and call end_conversation in the same turn. "
+    "Ask the closing question when what you were doing is finished and nothing "
+    "is outstanding — not after every sentence, and never twice in a row. If "
+    "they answer it with another request, deal with the request and do not ask "
+    "again until the next lull. "
+    "A plain goodbye needs no closing question at all: 'to wszystko', 'dzięki, "
+    "koniec', 'pa', 'nara' — say the farewell and call end_conversation "
+    "straight away. "
+    "Having answered a question is never itself a reason to end. After you "
+    "have given the range, found a charger or set the navigation, stay "
+    "listening, because what usually comes next is a follow-up about the same "
+    "thing. Never end while anything is still waiting, including a command "
+    "that has to be confirmed in the app. If you are unsure, stay listening."
 )
 
 
@@ -147,14 +170,16 @@ class LiveUnavailable(RuntimeError):
 END_CONVERSATION = {
     "name": "end_conversation",
     "description": (
-        "Close the voice conversation and stop listening. Call this once the "
-        "exchange is finished — the driver has said they need nothing more, "
-        "or has said goodbye — and call it together with your closing line, "
-        "not instead of it: say the short farewell in the same turn. Do not "
-        "call it while anything is still waiting, including a command that "
-        "needs confirming in the app, and never as a way out of a question "
-        "you would rather not answer. If in doubt, stay listening; the driver "
-        "can always close it themselves."
+        "Close the voice conversation and stop listening. Call this only once "
+        "the driver has said goodbye, or has answered 'no' to your closing "
+        "question about whether they need anything else — never because they "
+        "turned down something you offered to do, such as setting the "
+        "navigation; that declines the task and the conversation carries on. "
+        "Call it together with your closing line, not instead of it: say the "
+        "short farewell in the same turn. Do not call it while anything is "
+        "still waiting, including a command that needs confirming in the app, "
+        "and never as a way out of a question you would rather not answer. If "
+        "in doubt, stay listening; the driver can always close it themselves."
     ),
 }
 

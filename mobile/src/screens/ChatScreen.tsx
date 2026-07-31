@@ -3,6 +3,7 @@ import {
   AppState,
   FlatList,
   KeyboardAvoidingView,
+  type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   PanResponder,
@@ -153,6 +154,22 @@ const LEVEL_INTERVAL_MS = 100;
  *  gets scrolled along by a new message. */
 const AT_BOTTOM_SLACK_PX = 80;
 
+/**
+ * How long our own scroll keeps producing scroll events.
+ *
+ * A scroll we asked for reports its progress exactly like a finger does, and
+ * for a moment it reports being nowhere near the end — the list has just grown
+ * and the offset has not caught up. Read as the driver scrolling away, that one
+ * event switched following off for the rest of the conversation. So events
+ * inside this window may say "arrived at the bottom" and may not say "left it".
+ *
+ * Two lengths because the two kinds of scroll take different times to land: an
+ * instant one is over by the next frame, an animated one is a smooth scroll the
+ * browser runs for as long as the distance takes.
+ */
+const PROGRAMMATIC_SETTLE_MS = 300;
+const PROGRAMMATIC_ANIMATED_SETTLE_MS = 1200;
+
 /** How long the screen keeps following a reply that is still uncovering
  *  itself. Matches the reveal in MessageRow, with a little slack. */
 const REVEAL_FOLLOW_MS = 900;
@@ -217,6 +234,12 @@ export function ChatScreen({
   // view along when it is: scrolling up to re-read something and being yanked
   // back down by a reply that has not been read yet is the worst of both.
   const atBottomRef = useRef(true);
+  // Until when scroll events are our own doing. See PROGRAMMATIC_SETTLE_MS.
+  const programmaticUntil = useRef(0);
+  // The two figures that say where the end of the list is. Kept from the
+  // list's own layout and content-size reports rather than guessed.
+  const contentHeightRef = useRef(0);
+  const viewportHeightRef = useRef(0);
   const [showJump, setShowJump] = useState(false);
   const { width } = useWindowDimensions();
   const wide = width >= WIDE_LAYOUT;
@@ -301,6 +324,43 @@ export function ChatScreen({
   const appendItems = useCallback((rows: ChatItem[]) => {
     atBottomRef.current = true;
     setItems((prev) => [...prev, ...rows]);
+  }, []);
+
+  /**
+   * Go to the end, and claim the scroll events that follow.
+   *
+   * Every programmatic scroll goes through here rather than touching the list
+   * directly, because each one has to be announced: handleScroll below cannot
+   * otherwise tell our scroll from the driver's, and mistaking one for the
+   * other is the whole of the bug where the transcript stopped following the
+   * conversation after a single long reply.
+   *
+   * By offset rather than by scrollToEnd, where the numbers are known. A list's
+   * own "end" is the last *cell's* position, which for a row added a moment ago
+   * is an estimate from the average row height — and the rows here are a
+   * one-line instrument log and a six-line answer. The two measurements below
+   * are exact and come straight from the list, so the target is too.
+   *
+   * Instant by default. An animated scroll to a target computed before the new
+   * row has been measured is a smooth glide to the wrong place, and the content
+   * keeps growing underneath it while the reveal runs — the animation is only
+   * worth having when the driver asked for the jump themselves.
+   */
+  const followEnd = useCallback((animated = false) => {
+    programmaticUntil.current =
+      Date.now() + (animated ? PROGRAMMATIC_ANIMATED_SETTLE_MS : PROGRAMMATIC_SETTLE_MS);
+    const list = listRef.current;
+    if (!list) return;
+    const content = contentHeightRef.current;
+    const viewport = viewportHeightRef.current;
+    if (content > 0 && viewport > 0) {
+      list.scrollToOffset({ offset: Math.max(0, content - viewport), animated });
+      return;
+    }
+    // Nothing measured yet — the very first render, before a layout has been
+    // reported. The list's own estimate is all there is, and it is right when
+    // there is nothing on screen to be wrong about.
+    list.scrollToEnd({ animated });
   }, []);
 
   /** The meter, at a rate a screen can actually show. */
@@ -730,35 +790,49 @@ export function ChatScreen({
     [history, refreshVehicle, refreshScheduled, language, t, onLocked, speechMode, halt]
   );
 
-  // Only follows the conversation while the conversation is what's on screen.
-  // Scrolled up to check what the assistant said two answers ago, the list used
-  // to snap back to the bottom the moment anything arrived — including the
-  // instrument-log lines a single turn appends one at a time.
-  useEffect(() => {
-    if (!items.length || !atBottomRef.current) return;
-    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
-  }, [items, pending]);
-
   /**
-   * Keep the end of a reply in view while it is still uncovering itself.
+   * The list grew — follow it, if the driver was reading the end.
    *
-   * The reveal grows the row after the list has already settled, so the effect
-   * above — which only runs when an item is added — would leave the last lines
-   * of a long answer below the fold. Stops on its own once the reveal is over.
+   * This is the event the feature actually needs, and it was the missing piece.
+   * Scrolling from an effect on `items` runs before the list has measured the
+   * rows that were just added: a FlatList goes to the end it last *measured*,
+   * which at that instant is still the previous end. The new reply had no
+   * height yet either — MessageRow uncovers its text over the following half
+   * second — so even a fresh measurement would have been of an empty row. Both
+   * problems are the same problem, and the content-size callback is the answer
+   * to both: it fires when the list knows how tall it is, including every step
+   * of the reveal.
+   *
+   * Only while the conversation is what's on screen. Scrolled up to check what
+   * the assistant said two answers ago, the list must stay where it was put.
    */
+  const handleContentSizeChange = useCallback(
+    (_width: number, height: number) => {
+      contentHeightRef.current = height;
+      if (!atBottomRef.current) return;
+      followEnd();
+    },
+    [followEnd]
+  );
+
+  /** How tall the transcript's window is. Half of where the end lives. */
+  const handleListLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      viewportHeightRef.current = event.nativeEvent.layout.height;
+      // The keyboard opening, or the phone being turned, moves the end without
+      // adding anything to the list. Following it here keeps the last reply
+      // above the composer instead of behind it.
+      if (atBottomRef.current) followEnd();
+    },
+    [followEnd]
+  );
+
+  /** Retire the reveal once it is over, so a later render can't restart it.
+   *  Keeping it in view is the content-size callback's job now. */
   useEffect(() => {
     if (!revealId) return;
-    const follow = setInterval(() => {
-      if (atBottomRef.current) listRef.current?.scrollToEnd({ animated: false });
-    }, 100);
-    const done = setTimeout(() => {
-      clearInterval(follow);
-      setRevealId(null);
-    }, REVEAL_FOLLOW_MS);
-    return () => {
-      clearInterval(follow);
-      clearTimeout(done);
-    };
+    const done = setTimeout(() => setRevealId(null), REVEAL_FOLLOW_MS);
+    return () => clearTimeout(done);
   }, [revealId]);
 
   const speakAloud = useCallback(
@@ -777,19 +851,37 @@ export function ChatScreen({
     void renameChat(chatId, title).then(setChats);
   }, []);
 
+  /**
+   * Where the reader is — and only when it was the reader who moved.
+   *
+   * The two directions are deliberately not symmetrical. Arriving at the bottom
+   * is believed whoever caused it. *Leaving* it is believed only outside the
+   * window a programmatic scroll owns, because a list whose content has just
+   * grown reports a large distance from the end for a moment before the scroll
+   * answering it lands — and reading that one event as "the driver has scrolled
+   * up to re-read something" is what used to switch following off for the whole
+   * rest of the conversation, jump button and all.
+   */
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    contentHeightRef.current = contentSize.height;
+    viewportHeightRef.current = layoutMeasurement.height;
     const fromEnd = contentSize.height - layoutMeasurement.height - contentOffset.y;
-    const atBottom = fromEnd <= AT_BOTTOM_SLACK_PX;
-    atBottomRef.current = atBottom;
-    setShowJump(!atBottom);
+    if (fromEnd <= AT_BOTTOM_SLACK_PX) {
+      atBottomRef.current = true;
+      setShowJump(false);
+      return;
+    }
+    if (Date.now() < programmaticUntil.current) return;
+    atBottomRef.current = false;
+    setShowJump(true);
   }, []);
 
   const jumpToLatest = useCallback(() => {
     atBottomRef.current = true;
     setShowJump(false);
-    listRef.current?.scrollToEnd({ animated: true });
-  }, []);
+    followEnd(true);
+  }, [followEnd]);
 
   const retryFailed = useCallback(() => {
     if (!failed) return;
@@ -835,6 +927,10 @@ export function ChatScreen({
     stopConversationRef.current();
     halt();
     setError(null);
+    // A conversation is opened to be read from its end, whatever the reading
+    // position was in the one being left behind.
+    atBottomRef.current = true;
+    setShowJump(false);
     skipSaveRef.current = true;
     setItems(chat.items);
     setHistory(chat.history);
@@ -850,6 +946,8 @@ export function ChatScreen({
     const fresh = newChatId();
     chatIdRef.current = fresh;
     setActiveChatId(fresh);
+    atBottomRef.current = true;
+    setShowJump(false);
     setItems([]);
     setHistory([]);
     setMenuOpen(false);
@@ -1129,7 +1227,7 @@ export function ChatScreen({
         // spent quota — the first transcript simply stays, which is exactly
         // what was there before.
         const rowId = id();
-        appendItems([{ kind: "message", id: rowId, role: "user", text, heard: true }]);
+        appendItems([{ kind: "message", id: rowId, role: "user", text }]);
         if (!audio) return;
         void transcribe(audio, language)
           .then((better) => {
@@ -1344,12 +1442,18 @@ export function ChatScreen({
               ]}
               onScroll={handleScroll}
               scrollEventThrottle={16}
+              // The list saying how tall it has become is what drives following
+              // now. It fires once the rows have actually been measured — after
+              // an item is added, and again at every step of a reply uncovering
+              // itself — which is the one moment at which "the end" is a real
+              // number rather than an estimate of one.
+              onContentSizeChange={handleContentSizeChange}
+              onLayout={handleListLayout}
               renderItem={({ item, index }) =>
                 item.kind === "message" ? (
                   <MessageRow
                     role={item.role}
                     text={item.text}
-                    heard={item.heard}
                     // The rail runs into a reply only when the turn above it
                     // actually touched the car.
                     attached={items[index - 1]?.kind === "tool"}

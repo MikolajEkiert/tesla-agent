@@ -131,15 +131,32 @@ async def require_session(request: Request, call_next):
 # would report an opaque network failure instead of "locked" — which is exactly
 # the difference between showing the passcode screen and showing an error.
 #
-# The session lives in a cookie, and browsers refuse to send credentials to a
-# wildcard origin, so "*" disables credentialed CORS. In production the app and
-# API share a domain via Caddy, making this moot; it matters for local dev
-# (set CORS_ORIGINS=http://localhost:8090).
+# The session lives in a cookie, and a browser will not send one to a wildcard
+# origin. That is the whole difficulty, and the default used to lose to it: with
+# CORS_ORIGINS unset the middleware answered "*" with credentials switched off,
+# which every request this app makes is refused by — api.ts sends
+# `credentials: "include"` on all of them, because the cookie is the session.
+#
+# The refusal happens in the browser, before any response is delivered, so
+# `fetch` rejects with a bare TypeError and the app cannot tell it from the
+# server being down. What the driver saw, every time, was "couldn't reach Amp's
+# backend — is it running?" while the backend sat there answering curl perfectly.
+#
+# It only ever bit locally, and that is not a coincidence: in production Caddy
+# serves the app and proxies the API on one domain, so nothing is cross-origin
+# and this middleware is never exercised at all. A default that fails in the one
+# situation it exists for is not a default worth keeping.
+#
+# So: an explicit CORS_ORIGINS is honoured as before, and the unset case means
+# local development — the loopback origins a dev server can be on, with
+# credentials allowed. Narrower than the "*" it replaces, not wider.
+_LOCAL_ORIGIN_RE = r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 _wildcard = settings.cors_origins == ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=not _wildcard,
+    allow_origins=[] if _wildcard else settings.cors_origins,
+    allow_origin_regex=_LOCAL_ORIGIN_RE if _wildcard else None,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

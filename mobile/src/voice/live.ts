@@ -63,28 +63,28 @@ const INPUT_RATE = 16000;
 const OUTPUT_RATE = 24000;
 
 /**
- * Nothing said and nothing happening for this long ends the conversation.
+ * Nobody there for this long ends the conversation.
  *
  * The old loop counted empty turns because it drove the turn boundaries
- * itself. Turn detection now belongs to the model, which will happily listen
- * to an empty car until the token expires — so the guard has to be a clock.
- * It is reset by speech being recognised or by the assistant doing anything,
- * never by loudness alone: a car is a noisy room and road noise must not count
- * as company.
- */
-/**
- * Silence that ends the conversation.
+ * itself. Turn detection belongs to the model now, and the model will happily
+ * listen to an empty car until the token expires — so the guard has to be a
+ * clock. It is reset by speech being recognised or by the assistant doing
+ * something, never by loudness alone: a car is a noisy room and road noise must
+ * not count as company.
  *
- * Five seconds, at the owner's request, and it is short enough that the
- * measurement has to be honest — see onFrame, where anything audible resets
- * it. The old ninety seconds could afford to watch only the model's side of
- * the exchange; this cannot.
+ * That was the original rule, and it was quietly given up when the timeout was
+ * cut to five seconds and wired to the level meter instead. Both halves of that
+ * were wrong in the same way. In a car, tyres and wipers cleared the threshold
+ * continuously, so the clock never ran down and the guard did nothing at all;
+ * at a desk, nothing cleared it, so the session hung up on anyone who paused to
+ * think. Loudness was never the question.
+ *
+ * So it measures conversation again, and five seconds of *that* would cut off
+ * every pause — hence thirty. It is a backstop rather than the way conversations
+ * end: the assistant closes them itself now (see END_CONVERSATION_TOOL), and
+ * the ✕ has always been there. This is for the phone nobody came back to.
  */
-const IDLE_TIMEOUT_MS = 5_000;
-
-/** Peak level that counts as "something is happening in here". The same figure
- *  the record-and-upload path uses for the same judgement. */
-const AUDIBLE_LEVEL = 0.02;
+const IDLE_TIMEOUT_MS = 30_000;
 
 /** Declared for this session only, in backend/app/live.py, and answered on this
  *  side — see runTools. Never sent to /live/tool: it does nothing to the car. */
@@ -243,6 +243,28 @@ export class LiveSession {
   private endAfterReply = false;
   /** Whether any of that goodbye has actually been heard yet. */
   private endSpoke = false;
+  /**
+   * Whether the assistant has said anything since the driver last spoke.
+   *
+   * Which sounds redundant next to endSpoke, and is the difference between
+   * hanging up when the goodbye ends and hanging up eight seconds later.
+   *
+   * endSpoke only counts audio arriving *after* end_conversation was called,
+   * because the flag it feeds was written for the ordering the model was
+   * expected to use: ask to close, then be given the answer, then generate the
+   * farewell. It does the opposite at least as often — it says "Dobrze.
+   * Szerokiej drogi! Do usłyszenia." and calls end_conversation on the way out
+   * of the same turn. The farewell is then already played and gone by the time
+   * the request is seen, endSpoke is still false, and the session sits waiting
+   * for words it has finished saying until END_GRACE_MS gives up on them. Which
+   * is what the driver experiences as the conversation refusing to end.
+   *
+   * This one is set by any audio at all, so the request can be answered with
+   * what actually happened rather than with what happened after it. Cleared
+   * when the driver speaks, because from that point anything owed is owed
+   * afresh.
+   */
+  private spokeThisTurn = false;
   /**
    * The server has said this turn is finished generating.
    *
@@ -478,6 +500,21 @@ export class LiveSession {
       // is not guaranteed to close its own turn, and nothing else would ever
       // lift the suppression.
       this.suppressed = false;
+      // And whatever was said, it was not nothing — so a close that has been
+      // asked for but not yet spoken is off.
+      //
+      // The model calls end_conversation in one turn and says goodbye in the
+      // next, so there is a real gap where it is silent and the session is
+      // already committed to hanging up. Speak into that gap and there is
+      // nothing to interrupt, so no `interrupted` arrives to cancel anything:
+      // the model simply answered the new question, the first chunk of that
+      // answer counted as the promised farewell, and the session closed on top
+      // of a conversation that had just restarted. Only the unspoken case is
+      // cancelled here — talking over a goodbye already in progress is the
+      // `interrupted` branch below, which has always handled it.
+      if (this.endAfterReply && !this.endSpoke) this.cancelPendingEnd();
+      // A new question, so nothing said before it counts as an answer to it.
+      this.spokeThisTurn = false;
       this.heard += heard;
       this.touch();
     }
@@ -505,6 +542,9 @@ export class LiveSession {
       // The farewell has started. Until this, a session asked to close has
       // nothing to wait for and must not close — see maybeSettle.
       if (this.endAfterReply) this.endSpoke = true;
+      // And remember it even when nothing has been asked yet, because the
+      // request often comes second. See spokeThisTurn.
+      this.spokeThisTurn = true;
       // More is being said, whatever the queue happens to hold this instant.
       this.turnEnded = false;
       this.touch();
@@ -518,18 +558,14 @@ export class LiveSession {
       this.stopPlayback();
       this.speaking = false;
       this.turnEnded = false;
+      // Cut off mid-word, so whatever was being said does not count as having
+      // been said to anyone.
+      this.spokeThisTurn = false;
       this.flushSaid();
       // Talking over a goodbye is not agreeing with it. Whatever they have
       // started saying, the conversation is evidently not finished, so the
       // pending close is dropped rather than fired at the end of this turn.
-      if (this.endAfterReply) {
-        this.endAfterReply = false;
-        this.endSpoke = false;
-        if (this.endTimer) {
-          clearTimeout(this.endTimer);
-          this.endTimer = null;
-        }
-      }
+      this.cancelPendingEnd();
       this.handlers.onPhase("listening");
       this.touch();
     }
@@ -580,8 +616,16 @@ export class LiveSession {
     this.handlers.onPhase("listening");
   }
 
-  /** The goodbye has been heard to the end. */
-  private conclude(): void {
+  /**
+   * The conversation is not ending after all.
+   *
+   * Everything the close was standing on goes at once — the flag, the record of
+   * having started the farewell, and the backstop timer. Leaving the timer
+   * behind was its own bug in waiting: it fires eight seconds after the tool
+   * call whatever has happened since, so a driver who changed their mind would
+   * be hung up on mid-sentence by a clock nobody could see.
+   */
+  private cancelPendingEnd(): void {
     if (!this.endAfterReply) return;
     this.endAfterReply = false;
     this.endSpoke = false;
@@ -589,6 +633,12 @@ export class LiveSession {
       clearTimeout(this.endTimer);
       this.endTimer = null;
     }
+  }
+
+  /** The goodbye has been heard to the end. */
+  private conclude(): void {
+    if (!this.endAfterReply) return;
+    this.cancelPendingEnd();
     this.handlers.onConcluded();
   }
 
@@ -627,7 +677,11 @@ export class LiveSession {
       // playing.
       if (call.name === END_CONVERSATION_TOOL) {
         this.endAfterReply = true;
-        this.endSpoke = false;
+        // Already said, if the farewell led and the request followed — which is
+        // the ordinary case, not the exception. Starting this at false and
+        // waiting for audio that has already played is what left the microphone
+        // open for the whole of END_GRACE_MS after "do usłyszenia".
+        this.endSpoke = this.spokeThisTurn;
         // A model that asks to close and then says nothing would leave the
         // microphone open indefinitely, waiting for a goodbye that is never
         // coming. Long enough to cover generating and speaking one short line.
@@ -667,6 +721,16 @@ export class LiveSession {
 
     this.touch();
     this.send({ toolResponse: { functionResponses: responses } });
+
+    // Nothing may be coming that would close this.
+    //
+    // Every other route into maybeSettle is an event — the turn completing, the
+    // last chunk of audio finishing. A request to close that arrives after both
+    // of those have already happened gets neither, so the session would sit
+    // there fully finished and wait out END_GRACE_MS for a reason that no
+    // longer exists. maybeSettle refuses politely when the turn really is still
+    // running, so asking here costs nothing.
+    if (this.endAfterReply) this.maybeSettle();
   }
 
   /** Hold on to the driver's audio, oldest dropped once the cap is reached —
@@ -812,15 +876,15 @@ export class LiveSession {
     this.framePeak = Math.max(this.framePeak, peak);
     const now = Date.now();
 
-    // Anything audible counts as the conversation still being had.
+    // The peak drives the listening indicator and nothing else.
     //
-    // The idle clock used to be reset only by the model — a transcript, a
-    // chunk of reply, a tool call — which was fine at ninety seconds and is
-    // not at five: someone mid-sentence produces no model events at all until
-    // the phrase lands, and the session would close over the top of them. What
-    // the timeout is actually about is silence in the car, so silence in the
-    // car is what it measures.
-    if (peak >= AUDIBLE_LEVEL) this.touch();
+    // It used to reset the idle clock as well, and that is the one thing a
+    // level must not do. A car is loud: tyres, wipers, a passenger's radio all
+    // clear any threshold worth setting, so the timeout never fired where it
+    // was needed — and a quiet room does the opposite, hanging up on a driver
+    // who paused to think because thinking is inaudible. The clock is reset by
+    // things that only happen when somebody is actually talking to the car:
+    // see touch() and its callers in onMessage and runTools.
     if (now - this.lastLevelAt >= LEVEL_INTERVAL_MS) {
       this.lastLevelAt = now;
       this.handlers.onLevel?.(this.framePeak);

@@ -21,3 +21,6 @@ HANDOFF.md
 # Basic-auth credentials guarding the site (bcrypt hash)
 deploy/.env.auth
 backend/.env.*
+
+# TTS cache written by a backend run from the repo root (see app/tts.py).
+/data/
