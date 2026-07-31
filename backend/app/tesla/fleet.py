@@ -29,7 +29,7 @@ import httpx
 
 from app.auth.oauth import TokenStore
 from app.config import get_settings
-from app.geo import reverse_geocode
+from app.geo import clean_text, reverse_geocode
 
 # Mode numbers come from the proxy's own dispatch table (pkg/proxy/command.go).
 CLIMATE_KEEPER_MODES = {"off": 0, "on": 1, "dog": 2, "camp": 3}
@@ -69,6 +69,35 @@ def _raise_for_status(r: httpx.Response, source: str) -> None:
 
 
 MILES_TO_KM = 1.609344
+
+
+def _summarise_schedules(raw: Any, time_field: str) -> list[dict[str, Any]]:
+    """Just enough of each schedule for the model to talk about it and to
+    remove the right one.
+
+    The full records carry coordinates, and the car's parking spots are the
+    owner's home and workplace — there is no reason for them to travel into a
+    model's context to answer "when do I charge".
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in raw[:10]:
+        if not isinstance(entry, dict):
+            continue
+        minutes = entry.get(time_field)
+        item: dict[str, Any] = {
+            "id": entry.get("id"),
+            "enabled": entry.get("enabled", True),
+            "days": entry.get("days_of_week"),
+            "one_time": entry.get("one_time", False),
+        }
+        if isinstance(minutes, int):
+            item["time"] = f"{minutes // 60:02d}:{minutes % 60:02d}"
+        if entry.get("name"):
+            item["name"] = _clean_label(entry["name"])
+        out.append(item)
+    return out
 
 
 def _put(target: dict[str, Any], key: str, value: Any) -> None:
@@ -606,14 +635,6 @@ class FleetImpl:
             "map_url": f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=17/{lat}/{lon}",
         }
 
-    # --- native scheduling / comfort ---
-    async def set_scheduled_charging(
-        self, enable: bool, minutes_after_midnight: int
-    ) -> dict[str, Any]:
-        return await self._command(
-            "set_scheduled_charging", {"enable": enable, "time": minutes_after_midnight}
-        )
-
     async def set_cabin_overheat_protection(
         self, on: bool, fan_only: bool = False
     ) -> dict[str, Any]:
@@ -651,30 +672,190 @@ class FleetImpl:
         lat, lon = await self._coordinates()
         return await self._command("trigger_homelink", {"lat": lat, "lon": lon})
 
+    # --- schedules (the current API; see the note on the old commands) ---
+    #
+    # Tesla's own docs mark set_scheduled_charging and set_scheduled_departure
+    # as not recommended from firmware 2024.26 onward, pointing at these
+    # instead. This car is well past that. The new ones are a different shape
+    # rather than a rename: schedules have identities, repeat on chosen days,
+    # and are tied to a place — the car applies them when it is parked near
+    # the coordinates they were created with, which is what makes "charge
+    # overnight" mean at home rather than wherever it happens to be.
+
+    async def list_schedules(self) -> dict[str, Any]:
+        token = await self._access_token()
+        vid = await self._vehicle()
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(
+                f"{self.settings.tesla_fleet_base}/api/1/vehicles/{vid}/vehicle_data",
+                headers={"Authorization": f"Bearer {token}"},
+                # Asked for explicitly: these two are not in the default
+                # payload, and requesting only them keeps this cheap.
+                params={"endpoints": "charge_schedule_data;preconditioning_schedule_data"},
+            )
+        if r.status_code == 408:
+            raise VehicleAsleepError()
+        _raise_for_status(r, "Tesla Fleet API (schedules)")
+        data = r.json().get("response", {})
+        return {
+            "charge_schedules": _summarise_schedules(
+                data.get("charge_schedule_data", {}).get("charge_schedules", []), "start_time"
+            ),
+            "precondition_schedules": _summarise_schedules(
+                data.get("preconditioning_schedule_data", {}).get(
+                    "preconditioning_schedules", []
+                ),
+                "precondition_time",
+            ),
+        }
+
+    async def add_charge_schedule(
+        self, minutes_after_midnight: int, days: str, one_time: bool, schedule_id: int | None
+    ) -> dict[str, Any]:
+        lat, lon = await self._coordinates()
+        payload: dict[str, Any] = {
+            "days_of_week": days,
+            "enabled": True,
+            "lat": lat,
+            "lon": lon,
+            # Start time only: an end time would cap charging part-way, which
+            # is a different intention from "begin at this hour".
+            "start_enabled": True,
+            "start_time": minutes_after_midnight,
+            "end_enabled": False,
+            "one_time": one_time,
+        }
+        if schedule_id is not None:
+            payload["id"] = schedule_id
+        return await self._command("add_charge_schedule", payload)
+
+    async def add_precondition_schedule(
+        self, minutes_after_midnight: int, days: str, one_time: bool, schedule_id: int | None
+    ) -> dict[str, Any]:
+        lat, lon = await self._coordinates()
+        payload: dict[str, Any] = {
+            "days_of_week": days,
+            "enabled": True,
+            "lat": lat,
+            "lon": lon,
+            "precondition_time": minutes_after_midnight,
+            "one_time": one_time,
+        }
+        if schedule_id is not None:
+            payload["id"] = schedule_id
+        return await self._command("add_precondition_schedule", payload)
+
+    async def remove_schedule(self, kind: str, schedule_id: int) -> dict[str, Any]:
+        command = (
+            "remove_precondition_schedule"
+            if kind == "precondition"
+            else "remove_charge_schedule"
+        )
+        return await self._command(command, {"id": schedule_id})
+
     async def set_charging_amps(self, amps: int) -> dict[str, Any]:
         return await self._command("set_charging_amps", {"charging_amps": amps})
 
-    async def set_scheduled_departure(
-        self, enable: bool, minutes_after_midnight: int, precondition: bool
-    ) -> dict[str, Any]:
-        # Off-peak fields are sent explicitly rather than omitted: Tesla treats
-        # this payload as the whole setting, so leaving them out re-enables
-        # whatever the car had configured before.
-        return await self._command(
-            "set_scheduled_departure",
-            {
-                "enable": enable,
-                "departure_time": minutes_after_midnight,
-                "preconditioning_enabled": precondition,
-                "preconditioning_weekdays_only": False,
-                "off_peak_charging_enabled": False,
-                "off_peak_charging_weekdays_only": False,
-                "end_off_peak_time": 0,
-            },
-        )
 
     async def set_steering_wheel_heater(self, on: bool) -> dict[str, Any]:
         return await self._command("remote_steering_wheel_heater_request", {"on": on})
+
+    async def set_preconditioning_max(self, on: bool) -> dict[str, Any]:
+        # `manual_override` mirrors the car's own max-defrost button, which
+        # overrides whatever the climate was doing rather than blending with it.
+        return await self._command(
+            "set_preconditioning_max", {"on": on, "manual_override": on}
+        )
+
+    async def set_cop_temp(self, level: str) -> dict[str, Any]:
+        return await self._command(
+            "set_cop_temp", {"cop_temp": {"low": 0, "medium": 1, "high": 2}.get(level, 1)}
+        )
+
+    async def recent_alerts(self) -> dict[str, Any]:
+        data = await self._get_json("recent_alerts", "recent alerts")
+        alerts = data.get("recent_alerts")
+        if not isinstance(alerts, list):
+            return {"alerts": []}
+        # Newest first and capped: the car keeps a long tail of these, and a
+        # wall of them in the model's context buys nothing over the handful
+        # that are current.
+        return {
+            "alerts": [
+                {
+                    "name": _clean_label(a.get("name")),
+                    "time": a.get("time"),
+                    "audience": a.get("audience"),
+                }
+                for a in alerts[:10]
+                if isinstance(a, dict)
+            ]
+        }
+
+    async def release_notes(self) -> dict[str, Any]:
+        data = await self._get_json("release_notes", "release notes")
+        notes = data.get("release_notes")
+        if not isinstance(notes, list):
+            return {"notes": []}
+        return {
+            "version": data.get("version"),
+            "notes": [
+                {
+                    "title": _clean_label(n.get("title")),
+                    # Longer than a label: this is the one place a paragraph is
+                    # the answer rather than a name to be shortened.
+                    "description": clean_text(n.get("description"), 400),
+                }
+                for n in notes[:8]
+                if isinstance(n, dict)
+            ],
+        }
+
+    async def charging_history(self) -> dict[str, Any]:
+        """Sessions and what they cost.
+
+        Account-scoped rather than vehicle-scoped — a different path shape from
+        everything else here, and it never needs the car awake.
+        """
+        token = await self._access_token()
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(
+                f"{self.settings.tesla_fleet_base}/api/1/dx/charging/history",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        _raise_for_status(r, "Tesla Fleet API (charging history)")
+        raw = r.json().get("response", {})
+        sessions = raw.get("data") if isinstance(raw, dict) else raw
+        if not isinstance(sessions, list):
+            return {"sessions": []}
+        return {
+            "sessions": [
+                {
+                    "site": _clean_label(s.get("siteLocationName")),
+                    "started": s.get("chargeStartDateTime"),
+                    "kwh": s.get("energyUsed") or s.get("unitOfMeasureEnergy"),
+                    "cost": s.get("totalCost") or s.get("fees"),
+                }
+                for s in sessions[:20]
+                if isinstance(s, dict)
+            ]
+        }
+
+    async def _get_json(self, endpoint: str, what: str) -> dict[str, Any]:
+        """A plain vehicle-scoped GET. Never wakes the car: these are things
+        the car reported earlier, and waking it to read them would cost battery
+        to learn nothing new."""
+        token = await self._access_token()
+        vid = await self._vehicle()
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(
+                f"{self.settings.tesla_fleet_base}/api/1/vehicles/{vid}/{endpoint}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        if r.status_code == 408:
+            raise VehicleAsleepError()
+        _raise_for_status(r, f"Tesla Fleet API ({what})")
+        return r.json().get("response", {}) or {}
 
     async def schedule_software_update(self, delay_seconds: int) -> dict[str, Any]:
         return await self._command(
@@ -691,6 +872,38 @@ class FleetImpl:
         return await self._command(
             "media_next_fav" if direction == "next" else "media_prev_fav"
         )
+
+    async def set_route(self, stops: list[dict[str, Any]]) -> dict[str, Any]:
+        """Send the stops in order, one command each.
+
+        `order` is documented — "Order can be used to specify order of multiple
+        stops" — but what is *not* documented is whether separate calls
+        accumulate into one route or each replaces the destination. That is the
+        difference between this working and only the last stop arriving, and it
+        cannot be settled from the outside.
+
+        So the result says what actually happened and no more:
+        `verified_multi_stop` stays false until the car is observed building a
+        route from these, and the tool description tells the model not to
+        promise the driver a multi-stop route on the strength of it. An
+        optimistic claim here becomes a confident wrong sentence in the cabin.
+        """
+        sent: list[dict[str, Any]] = []
+        for order, stop in enumerate(stops, start=1):
+            # Unsigned, like every navigation command: the signing proxy
+            # handles none of them (verified against its own command table).
+            result = await self._command(
+                "navigation_gps_request",
+                {"lat": stop["latitude"], "lon": stop["longitude"], "order": order},
+                signed=False,
+            )
+            sent.append({"order": order, "label": stop.get("label"), "accepted": bool(result)})
+        return {
+            "ok": True,
+            "stops_sent": len(sent),
+            "stops": sent,
+            "verified_multi_stop": False,
+        }
 
     # --- navigation (unsigned — the proxy itself refuses this command) ---
     async def set_navigation_destination(self, address: str) -> dict[str, Any]:

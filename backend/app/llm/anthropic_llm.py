@@ -9,7 +9,12 @@ from typing import Any
 from anthropic import AsyncAnthropic
 
 from app.config import get_settings
-from app.llm.prompt import build_system_prompt, confirmation_payload, sanitize_history
+from app.llm.prompt import (
+    MAX_TOOL_ROUNDS,
+    build_system_prompt,
+    confirmation_payload,
+    sanitize_history,
+)
 from app.tesla.adapter import TeslaAdapter
 from app.tools import TOOLS, dispatch
 
@@ -32,10 +37,18 @@ class AnthropicOrchestrator:
         messages.append({"role": "user", "content": user_text})
         tool_trace: list[dict[str, Any]] = []
 
-        while True:
+        # Bounded for the same reason as the Gemini provider: the round count
+        # comes from model output, and an unbounded loop spends quota and car
+        # wake-ups without a ceiling.
+        for _ in range(MAX_TOOL_ROUNDS):
             resp = await self.client.messages.create(
                 model=self.settings.anthropic_model,
-                max_tokens=1024,
+                # 1024 was too tight: with thinking on, a round that asks for
+                # several tools can hit the ceiling, and a truncated turn takes
+                # the "not tool_use" branch below — silently dropping the tool
+                # calls *and* writing an unanswered tool_use into the history
+                # the client replays, which then breaks the following turn too.
+                max_tokens=4096,
                 # Low effort keeps latency down for voice. Thinking stays on by
                 # default (do NOT disable it on Opus 5 — with tools it can emit
                 # tool calls as plain text).
@@ -45,6 +58,22 @@ class AnthropicOrchestrator:
                 messages=messages,
             )
 
+            if resp.stop_reason == "max_tokens":
+                # Say so instead of returning a confident half-answer. The turn
+                # is deliberately not appended: whatever tool_use blocks it
+                # holds were never answered and must not travel into history.
+                text = "".join(b.text for b in resp.content if b.type == "text")
+                cut = (
+                    "Odpowiedź się urwała. Zapytaj o mniejszy kawałek naraz."
+                    if (language or "").lower() == "pl"
+                    else "That answer was cut short. Ask for a smaller piece at a time."
+                )
+                return {
+                    "reply": f"{text}\n\n{cut}".strip(),
+                    "history": messages,
+                    "tool_trace": tool_trace,
+                }
+
             if resp.stop_reason != "tool_use":
                 text = "".join(b.text for b in resp.content if b.type == "text")
                 messages.append({"role": "assistant", "content": resp.content})
@@ -52,6 +81,8 @@ class AnthropicOrchestrator:
 
             messages.append({"role": "assistant", "content": resp.content})
 
+            # Sequential on purpose — see the note in gemini_llm.py: one car,
+            # one shared awake cache, one pending-actions dict.
             tool_results: list[dict[str, Any]] = []
             for block in resp.content:
                 if block.type != "tool_use":
@@ -85,3 +116,18 @@ class AnthropicOrchestrator:
                     tool_trace.append({"tool": block.name, "input": block.input, "ok": False})
 
             messages.append({"role": "user", "content": tool_results})
+
+        # Out of rounds — same reasoning as the Gemini provider.
+        while messages and messages[-1].get("role") == "assistant":
+            messages.pop()
+        return {
+            "reply": (
+                "Zatrzymałem się po kilku krokach, żeby nie kręcić się w kółko. "
+                "Powiedz, co dokładnie mam zrobić."
+                if (language or "").lower() == "pl"
+                else "I stopped after several steps to avoid going in circles. "
+                "Tell me exactly what you'd like me to do."
+            ),
+            "history": messages,
+            "tool_trace": tool_trace,
+        }

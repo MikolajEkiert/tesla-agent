@@ -29,7 +29,7 @@ from typing import Any
 import httpx
 
 from app.config import get_settings
-from app.geo import USER_AGENT, geocode
+from app.geo import USER_AGENT, clean_text, geocode
 from app.tesla.adapter import TeslaAdapter
 
 OCM_URL = "https://api.openchargemap.io/v3/poi/"
@@ -61,12 +61,9 @@ MAX_FIELD_LEN = 120
 
 
 def _clean(text: Any) -> str | None:
-    """Untrusted third-party text, made boring."""
-    if text is None:
-        return None
-    flat = " ".join(str(text).split())          # collapse newlines and runs of space
-    flat = "".join(ch for ch in flat if ch.isprintable())
-    return flat[:MAX_FIELD_LEN] or None
+    """Untrusted third-party text, made boring. One implementation, in geo.py,
+    shared with the place search — the threat is identical and two copies drift."""
+    return clean_text(text, MAX_FIELD_LEN)
 
 
 class ChargerSourceUnavailable(RuntimeError):

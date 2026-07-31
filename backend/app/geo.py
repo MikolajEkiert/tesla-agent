@@ -19,12 +19,26 @@ import httpx
 MAX_LABEL_LEN = 160
 
 
-def _clean(text: Any) -> str | None:
+def clean_text(text: Any, max_len: int = MAX_LABEL_LEN) -> str | None:
+    """Untrusted third-party text, made boring.
+
+    Lives here so every source shares one version: OpenStreetMap and Nominatim
+    are anonymously editable, and Google Places names and addresses are
+    user-submitted too. All of it lands in the model's context as a tool
+    result, where a crafted "name" carrying a wall of instructions would
+    otherwise arrive intact. Length-capping and stripping control characters is
+    the cheap half of the defence; the confirmation gate in actions.py is the
+    half that means such text has no authority even if it survives.
+    """
     if text is None:
         return None
-    flat = " ".join(str(text).split())
+    flat = " ".join(str(text).split())          # collapse newlines and runs of space
     flat = "".join(ch for ch in flat if ch.isprintable())
-    return flat[:MAX_LABEL_LEN] or None
+    return flat[:max_len] or None
+
+
+# Kept as the old private name so this module's own call sites read unchanged.
+_clean = clean_text
 
 
 NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"

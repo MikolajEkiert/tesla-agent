@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app import actions, chargers
+from app import actions, chargers, navigation, places
 from app.tesla.adapter import TeslaAdapter
 
 TOOLS: list[dict[str, Any]] = [
@@ -227,22 +227,55 @@ TOOLS: list[dict[str, Any]] = [
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
-        "name": "set_scheduled_charging",
+        "name": "add_schedule",
         "description": (
-            "Set (or clear) the daily time at which the car starts charging — "
-            "the usual reason is a cheaper night tariff. The time is the car's "
-            "own local time, given as hour and minute. This is stored in the "
-            "car, so it keeps working regardless of this app. Pass enable=false "
-            "to turn the schedule off."
+            "Add or update a schedule stored in the car. kind='charge' sets "
+            "when charging starts (the usual reason is a cheaper night "
+            "tariff); kind='precondition' has the car warm or cool the cabin "
+            "so it is ready to leave at that time. Times are the car's own "
+            "local time. `days` accepts 'All', 'Weekdays', 'Weekends' or a "
+            "comma-separated list like 'Monday,Thursday'. "
+            "A schedule applies at the place the car is standing when it is "
+            "created — normally home — so say so if the user might be "
+            "somewhere else. To change an existing one, pass its id from "
+            "list_schedules; to turn one off, use remove_schedule."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "enable": {"type": "boolean"},
+                "kind": {"type": "string", "enum": ["charge", "precondition"]},
                 "hour": {"type": "integer", "minimum": 0, "maximum": 23},
                 "minute": {"type": "integer", "minimum": 0, "maximum": 59},
+                "days": {"type": "string"},
+                "one_time": {"type": "boolean", "description": "Run once, then forget it."},
+                "id": {"type": "integer", "description": "Update this existing schedule."},
             },
-            "required": ["enable"],
+            "required": ["kind", "hour"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "list_schedules",
+        "description": (
+            "The charge and preconditioning schedules the car is holding, with "
+            "their ids. Read this before changing or removing one — ids are "
+            "the car's, not something to guess."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "remove_schedule",
+        "description": (
+            "Delete one schedule by id. This is how a schedule is turned off; "
+            "there is no enabled flag to flip. Get the id from list_schedules."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["charge", "precondition"]},
+                "id": {"type": "integer"},
+            },
+            "required": ["kind", "id"],
             "additionalProperties": False,
         },
     },
@@ -333,6 +366,68 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "set_route",
+        "description": (
+            "Send a route with stops to the car's navigation; it visits them "
+            "in the order given. Use this when the user wants to stop "
+            "somewhere on the way ('charge in Kielce, then Warsaw'). For a "
+            "single plain destination use set_navigation_destination instead. "
+            "Each stop needs either `coordinates` copied verbatim from a "
+            "find_chargers or find_places `navigate_to` value, or a specific "
+            "geocodable `address` — never coordinates you worked out yourself. "
+            "Report only what the result says: if `verified_multi_stop` is "
+            "false, the stops were sent but the car has not been confirmed to "
+            "build them into one route, so do not promise the driver a "
+            "multi-stop route — say the stops were sent and to check the "
+            "screen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "stops": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string"},
+                            "coordinates": {"type": "string"},
+                            "address": {"type": "string"},
+                        },
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["stops"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "find_places",
+        "description": (
+            "Find real places: restaurants, cafés, shops, hotels, parking, "
+            "petrol, pharmacies. Searches around the car unless `place` names "
+            "somewhere else ('in Kraków', 'near the airport'). "
+            "Results carry only what the source returned — if a rating, "
+            "address or opening state is missing from a result, say you don't "
+            "have it rather than filling it in, and never describe a place "
+            "beyond its fields. "
+            "Do not use this for chargers: find_chargers is better and is the "
+            "only source with live stall counts. "
+            "To route somewhere, pass its `navigate_to` value verbatim to "
+            "set_navigation_destination or set_route — never the name."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to look for."},
+                "place": {"type": "string", "description": "Search near here instead."},
+                "open_now": {"type": "boolean"},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "set_charging_amps",
         "description": (
             "Set how many amps the car draws while charging. Lower it when a "
@@ -349,29 +444,62 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "set_scheduled_departure",
+        "name": "set_preconditioning_max",
         "description": (
-            "Have the car ready to leave at a given time: it decides when to "
-            "start charging, and optionally warms or cools the cabin to meet "
-            "it. Different from set_scheduled_charging, which sets when "
-            "charging begins rather than when you leave. Use this when the "
-            "user talks about when they are leaving; use the other when they "
-            "talk about when charging should start."
+            "Max defrost: everything at full to clear frozen or fogged glass "
+            "quickly. Turn it off again once the windows are clear — it is "
+            "loud and drains the battery faster than ordinary climate."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {
-                "enable": {"type": "boolean"},
-                "hour": {"type": "integer"},
-                "minute": {"type": "integer"},
-                "precondition": {
-                    "type": "boolean",
-                    "description": "Also bring the cabin to temperature for that time.",
-                },
-            },
-            "required": ["enable"],
+            "properties": {"on": {"type": "boolean"}},
+            "required": ["on"],
             "additionalProperties": False,
         },
+    },
+    {
+        "name": "set_cop_temp",
+        "description": (
+            "The temperature at which cabin overheat protection kicks in: low "
+            "(about 30°C), medium (35°C) or high (40°C). This does not switch "
+            "the protection on — set_cabin_overheat_protection does that."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"level": {"type": "string", "enum": ["low", "medium", "high"]}},
+            "required": ["level"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "recent_alerts",
+        "description": (
+            "Faults and warnings the car itself has recorded. Use this for "
+            "'is everything OK with the car'. An empty list means it has not "
+            "reported anything — say that, rather than declaring the car "
+            "healthy, which is a stronger claim than the data supports."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "release_notes",
+        "description": (
+            "What the pending or most recent software update changes. Pairs "
+            "with software_update: read this before installing so the owner "
+            "knows what they are agreeing to."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "charging_history",
+        "description": (
+            "Past charging sessions with where, how much energy and what it "
+            "cost. Answers 'how much have I spent on charging' and 'where did "
+            "I last charge'. Sum only the sessions returned and say what "
+            "period they cover — the list is recent history, not the whole "
+            "account."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
         "name": "set_steering_wheel_heater",
@@ -445,8 +573,7 @@ NUMERIC_BOUNDS = {
     "set_charge_limit": {"percent": (50, 100)},
     "set_seat_heater": {"level": (0, 3)},
     "schedule_climate": {"celsius": (15, 28), "run_for_minutes": (1, 30)},
-    "set_scheduled_charging": {"hour": (0, 23), "minute": (0, 59)},
-    "set_scheduled_departure": {"hour": (0, 23), "minute": (0, 59)},
+    "add_schedule": {"hour": (0, 23), "minute": (0, 59)},
     # 5 A is the lowest the car accepts; 48 covers every domestic and wall
     # connector this car can be wired to. The car clamps to its own maximum
     # anyway, but sending nonsense wastes a wake-up to be told so.
@@ -486,6 +613,22 @@ async def dispatch(adapter: TeslaAdapter, name: str, args: dict[str, Any]) -> di
     return await dispatch_unguarded(adapter, name, args)
 
 
+async def _send_route(adapter: TeslaAdapter, stops: list[dict[str, Any]]) -> dict[str, Any]:
+    """Resolve every stop to coordinates, then hand the lot to the car.
+
+    A single stop given only as free text goes the old way instead: Tesla
+    geocodes a shared string server-side and is better at it than a Nominatim
+    lookup here, so there is no reason to resolve what we can simply forward.
+    """
+    if (
+        len(stops) == 1
+        and not navigation.parse_coordinates(stops[0].get("coordinates"))
+        and stops[0].get("address")
+    ):
+        return await adapter.set_navigation_destination(stops[0]["address"])
+    return await adapter.set_route(await navigation.resolve_stops(stops))
+
+
 async def dispatch_unguarded(
     adapter: TeslaAdapter, name: str, args: dict[str, Any]
 ) -> dict[str, Any]:
@@ -514,27 +657,48 @@ async def dispatch_unguarded(
             include_other_networks=args.get("include_other_networks", False),
         ),
         "where_is_car": lambda: adapter.get_location(),
+        # Language is left at the provider default rather than threaded through
+        # dispatch: place names come back in their own language either way, and
+        # the setting only shades generic labels. Plumbing the app's language
+        # this far down would touch every tool's signature for that.
+        "find_places": lambda: places.find_places(
+            adapter,
+            query=args["query"],
+            place=args.get("place"),
+            open_now=bool(args.get("open_now", False)),
+        ),
         "set_sentry_mode": lambda: adapter.set_sentry_mode(args["on"]),
         "control_windows": lambda: adapter.control_windows(args["command"]),
         "actuate_trunk": lambda: adapter.actuate_trunk(args["which"]),
         "charge_port": lambda: adapter.charge_port(args["open"]),
         "trigger_homelink": lambda: adapter.trigger_homelink(),
-        "set_scheduled_charging": lambda: adapter.set_scheduled_charging(
-            args["enable"],
+        "list_schedules": lambda: adapter.list_schedules(),
+        "add_schedule": lambda: (
+            adapter.add_precondition_schedule
+            if args.get("kind") == "precondition"
+            else adapter.add_charge_schedule
+        )(
             int(args.get("hour", 0)) * 60 + int(args.get("minute", 0)),
+            str(args.get("days", "All")),
+            bool(args.get("one_time", False)),
+            int(args["id"]) if args.get("id") is not None else None,
+        ),
+        "remove_schedule": lambda: adapter.remove_schedule(
+            args.get("kind", "charge"), int(args["id"])
         ),
         "set_cabin_overheat_protection": lambda: adapter.set_cabin_overheat_protection(
             args["on"], args.get("fan_only", False)
         ),
         "set_climate_keeper_mode": lambda: adapter.set_climate_keeper_mode(args["mode"]),
         "set_navigation_destination": lambda: adapter.set_navigation_destination(args["address"]),
+        "set_route": lambda: _send_route(adapter, args.get("stops") or []),
         "set_charging_amps": lambda: adapter.set_charging_amps(int(args["amps"])),
-        "set_scheduled_departure": lambda: adapter.set_scheduled_departure(
-            args["enable"],
-            int(args.get("hour", 0)) * 60 + int(args.get("minute", 0)),
-            bool(args.get("precondition", True)),
-        ),
         "set_steering_wheel_heater": lambda: adapter.set_steering_wheel_heater(args["on"]),
+        "set_preconditioning_max": lambda: adapter.set_preconditioning_max(args["on"]),
+        "set_cop_temp": lambda: adapter.set_cop_temp(args["level"]),
+        "recent_alerts": lambda: adapter.recent_alerts(),
+        "release_notes": lambda: adapter.release_notes(),
+        "charging_history": lambda: adapter.charging_history(),
         "set_volume": lambda: adapter.set_volume(float(args["level"])),
         "media_favorite": lambda: adapter.media_favorite(args["direction"]),
         "software_update": lambda: (

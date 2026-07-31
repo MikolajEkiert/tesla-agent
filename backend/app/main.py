@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 
-from app import actions, scheduler, tts, voice
+from app import actions, confirm_phrase, live, scheduler, tts, voice
 from app.auth import gate, passkey
 from app.config import get_settings
 from app.llm import build_orchestrator
@@ -416,6 +416,30 @@ async def voice_speak(req: VoiceSpeakRequest) -> Response:
     )
 
 
+class LiveTokenRequest(BaseModel):
+    voice: str | None = None
+
+
+@app.post("/voice/live-token")
+async def live_token(req: LiveTokenRequest) -> dict[str, Any]:
+    """A one-use credential letting the phone hold its own audio session.
+
+    Behind the session gate and deliberately not in TOKEN_ROUTES, for the same
+    reason /voice/speak isn't: a token holder standing next to a locked phone
+    should not be able to open a metered stream on the owner's project.
+
+    The credential is bound to one model and one configuration server-side, so
+    what reaches the browser cannot be turned into anything else — and the
+    session it opens has no tools, so it can talk but not act.
+    """
+    try:
+        return await live.mint_token(tts.resolve_voice(req.voice))
+    except live.LiveUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @app.get("/voice/voices")
 async def voice_voices() -> dict[str, Any]:
     """What the settings screen offers. Served rather than hardcoded in the app
@@ -458,14 +482,89 @@ class ConfirmRequest(BaseModel):
     token: str
 
 
-@app.get("/actions/pending/{token}")
-async def pending_action(token: str) -> dict[str, Any]:
-    """What the confirmation card should say. Behind the session gate, so only
-    the owner can even see that something is waiting."""
-    entry = actions.peek_pending(token)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Nothing pending for that token")
-    return entry
+@app.delete("/actions/pending/{token}")
+async def discard_action(token: str) -> dict[str, bool]:
+    """Throw away a proposal the owner declined.
+
+    Until this existed, "Cancel" on the card was a purely visual act: the card
+    said nothing was sent, which was true, but the proposal stayed parked and
+    tappable for the rest of its two minutes. Declining should mean the thing
+    is gone, not hidden.
+
+    Returns ok either way — a token already expired or already used is the
+    outcome the caller wanted anyway, and reporting the difference would only
+    tell an attacker which tokens exist.
+    """
+    actions.discard(token)
+    return {"ok": True}
+
+
+@app.post("/actions/confirm/voice")
+async def confirm_action_by_voice(
+    request: Request, token: str, language: str | None = None
+) -> dict[str, Any]:
+    """Settle a parked command with a spoken word instead of a tap.
+
+    Takes audio rather than text, and that is the point. The word never travels
+    the /chat path, so the model neither sees it nor decides what it meant: the
+    transcript is matched by confirm_phrase.classify, in code, on a route the
+    model has no way to call. There is no `confirm` tool and there must not be
+    one.
+
+    Session cookie only, and deliberately absent from TOKEN_ROUTES — the
+    Shortcut can ask questions, and opening the trunk still needs the app. That
+    boundary is unchanged by this route; /voice/ask returns no tool_trace, so a
+    token holder never has a confirm_token to submit here in the first place.
+
+    Every refusal is a plain outcome rather than an error, because the client's
+    response to all of them is the same: say so and let the owner tap.
+    """
+    if not get_settings().voice_confirm_enabled:
+        raise HTTPException(status_code=404, detail="Voice confirmation is switched off.")
+
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > voice.MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="Recording too long")
+
+    # Eligibility first, before spending a transcription on audio that could
+    # not have settled anything anyway.
+    try:
+        entry = actions.voice_eligible(token)
+    except actions.VoiceConfirmRefused as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    audio = await request.body()
+    try:
+        spoken = await voice.transcribe_confirmation(
+            audio, request.headers.get("content-type", "")
+        )
+    except voice.TranscriptionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    if not spoken:
+        # Nothing was clearly said. Costs no attempt: a noisy cabin must not be
+        # able to lock the owner out of his own card.
+        return {"ok": False, "outcome": "no_speech"}
+
+    verdict = confirm_phrase.classify(spoken)
+    if verdict == "cancel":
+        actions.discard(token)
+        return {"ok": False, "outcome": "cancelled"}
+    if verdict != "confirm":
+        # Heard, understood, and it was something else. This is the case worth
+        # spending the single attempt on.
+        actions.burn_voice_attempt(token)
+        return {"ok": False, "outcome": "no_match"}
+
+    try:
+        result = await actions.confirm(adapter, token)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"ok": True, "tool": entry["tool"], "result": result}
 
 
 @app.post("/actions/confirm")

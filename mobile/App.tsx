@@ -1,16 +1,13 @@
 import {
-  Manrope_400Regular,
-  Manrope_500Medium,
-  Manrope_600SemiBold,
-} from "@expo-google-fonts/manrope";
+  Figtree_400Regular,
+  Figtree_500Medium,
+  Figtree_600SemiBold,
+} from "@expo-google-fonts/figtree";
 import {
   JetBrainsMono_500Medium,
   JetBrainsMono_700Bold,
 } from "@expo-google-fonts/jetbrains-mono";
-import {
-  SpaceGrotesk_600SemiBold,
-  SpaceGrotesk_700Bold,
-} from "@expo-google-fonts/space-grotesk";
+import { Archivo_600SemiBold, Archivo_700Bold } from "@expo-google-fonts/archivo";
 import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useEffect, useState } from "react";
@@ -57,11 +54,11 @@ function useAuthCallbackNotice(): { success: boolean; error: string | null } {
 
 function AppInner() {
   const [fontsLoaded] = useFonts({
-    SpaceGrotesk_600SemiBold,
-    SpaceGrotesk_700Bold,
-    Manrope_400Regular,
-    Manrope_500Medium,
-    Manrope_600SemiBold,
+    Archivo_600SemiBold,
+    Archivo_700Bold,
+    Figtree_400Regular,
+    Figtree_500Medium,
+    Figtree_600SemiBold,
     JetBrainsMono_500Medium,
     JetBrainsMono_700Bold,
   });

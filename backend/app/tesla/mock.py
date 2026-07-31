@@ -93,6 +93,21 @@ class MockImpl:
         self._state["navigating_to"] = address
         return {"ok": True, "destination": address}
 
+    async def set_route(self, stops: list[dict[str, Any]]) -> dict[str, Any]:
+        self._state["route"] = stops
+        return {
+            "ok": True,
+            "stops_sent": len(stops),
+            "stops": [
+                {"order": i, "label": s.get("label"), "accepted": True}
+                for i, s in enumerate(stops, start=1)
+            ],
+            # The mock cannot answer the question the real car answers, and
+            # saying otherwise here would make the probe agree with an
+            # assumption instead of testing it.
+            "verified_multi_stop": False,
+        }
+
     async def nearby_chargers(self) -> dict[str, Any]:
         return {
             "sites": [
@@ -123,15 +138,52 @@ class MockImpl:
             "map_url": "https://www.openstreetmap.org/?mlat=50.006477&mlon=20.08068",
         }
 
-    async def set_scheduled_charging(
-        self, enable: bool, minutes_after_midnight: int
+    # Schedules keep their own ids here, the way the car does, so the whole
+    # create/list/remove cycle can be exercised without one.
+    _next_schedule_id = 1
+
+    def _add_schedule(
+        self, bucket: str, minutes: int, days: str, one_time: bool, schedule_id: int | None
     ) -> dict[str, Any]:
-        self._state["scheduled_charging"] = (
-            {"enabled": True, "minutes_after_midnight": minutes_after_midnight}
-            if enable
-            else {"enabled": False}
+        schedules: list[dict[str, Any]] = self._state.setdefault(bucket, [])
+        entry = {
+            "id": schedule_id if schedule_id is not None else MockImpl._next_schedule_id,
+            "enabled": True,
+            "days": days,
+            "one_time": one_time,
+            "time": f"{minutes // 60:02d}:{minutes % 60:02d}",
+        }
+        if schedule_id is None:
+            MockImpl._next_schedule_id += 1
+        schedules = [s for s in schedules if s["id"] != entry["id"]] + [entry]
+        self._state[bucket] = schedules
+        return {"ok": True, **entry}
+
+    async def list_schedules(self) -> dict[str, Any]:
+        return {
+            "charge_schedules": list(self._state.get("charge_schedules", [])),
+            "precondition_schedules": list(self._state.get("precondition_schedules", [])),
+        }
+
+    async def add_charge_schedule(
+        self, minutes_after_midnight: int, days: str, one_time: bool, schedule_id: int | None
+    ) -> dict[str, Any]:
+        return self._add_schedule(
+            "charge_schedules", minutes_after_midnight, days, one_time, schedule_id
         )
-        return {"ok": True, **self._state["scheduled_charging"]}
+
+    async def add_precondition_schedule(
+        self, minutes_after_midnight: int, days: str, one_time: bool, schedule_id: int | None
+    ) -> dict[str, Any]:
+        return self._add_schedule(
+            "precondition_schedules", minutes_after_midnight, days, one_time, schedule_id
+        )
+
+    async def remove_schedule(self, kind: str, schedule_id: int) -> dict[str, Any]:
+        bucket = "precondition_schedules" if kind == "precondition" else "charge_schedules"
+        before = self._state.get(bucket, [])
+        self._state[bucket] = [s for s in before if s["id"] != schedule_id]
+        return {"ok": True, "removed": len(before) != len(self._state[bucket])}
 
     async def set_cabin_overheat_protection(
         self, on: bool, fan_only: bool = False
@@ -169,14 +221,31 @@ class MockImpl:
         self._state["charging_amps"] = amps
         return {"ok": True, "charging_amps": amps}
 
-    async def set_scheduled_departure(
-        self, enable: bool, minutes_after_midnight: int, precondition: bool
-    ) -> dict[str, Any]:
+
+    async def set_preconditioning_max(self, on: bool) -> dict[str, Any]:
+        self._state["max_defrost"] = on
+        return {"ok": True, "max_defrost": on}
+
+    async def set_cop_temp(self, level: str) -> dict[str, Any]:
+        self._state["cop_temp"] = level
+        return {"ok": True, "cop_temp": level}
+
+    async def recent_alerts(self) -> dict[str, Any]:
+        return {"alerts": []}
+
+    async def release_notes(self) -> dict[str, Any]:
         return {
-            "ok": True,
-            "scheduled_departure": enable,
-            "departure_minutes_after_midnight": minutes_after_midnight,
-            "precondition": precondition,
+            "version": "2026.20.1 mock",
+            "notes": [{"title": "Mock release", "description": "Nothing really changed."}],
+        }
+
+    async def charging_history(self) -> dict[str, Any]:
+        return {
+            "sessions": [
+                {"site": "Supercharger Kraków", "started": "2026-07-20T21:14:00Z",
+                 "kwh": 38.4, "cost": 61.2},
+                {"site": "Dom", "started": "2026-07-18T23:02:00Z", "kwh": 21.0, "cost": 12.9},
+            ]
         }
 
     async def set_steering_wheel_heater(self, on: bool) -> dict[str, Any]:

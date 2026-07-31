@@ -70,6 +70,69 @@ export async function saveBargeIn(enabled: boolean): Promise<void> {
   }
 }
 
+const VOICE_CONFIRM_KEY = "amp.voiceconfirm";
+
+/**
+ * Whether a spoken word may settle a confirmation card mid-conversation.
+ *
+ * Defaults on, because reaching for the screen is the thing the owner asked to
+ * stop doing. Off is a real choice though: a car with passengers is a room
+ * where somebody else can say the word, and the backend's own switch
+ * (AMP_VOICE_CONFIRM) can withdraw it without shipping an app build.
+ */
+export async function loadVoiceConfirm(): Promise<boolean> {
+  try {
+    const stored = await AsyncStorage.getItem(VOICE_CONFIRM_KEY);
+    if (stored === "0") return false;
+    if (stored === "1") return true;
+  } catch {
+    // storage unavailable — the default stands
+  }
+  return true;
+}
+
+const LIVE_KEY = "amp.live";
+
+/**
+ * Whether a conversation runs over a live audio session or the older
+ * record-and-upload path.
+ *
+ * The reason this started as a setting — that streamed replies go through Web
+ * Audio, which obeyed the ringer switch when first measured — turned out not
+ * to bite: declaring the session as playback lifts the mute, measured on the
+ * phone this runs on.
+ *
+ * It stays a setting anyway. A held-open socket has failure modes a series of
+ * requests does not, and a stretch of bad signal on a drive is a worse place
+ * to discover that than a settings screen is to switch away from it.
+ */
+export async function loadLiveMode(): Promise<boolean> {
+  try {
+    const stored = await AsyncStorage.getItem(LIVE_KEY);
+    if (stored === "0") return false;
+    if (stored === "1") return true;
+  } catch {
+    // storage unavailable — the default stands
+  }
+  return true;
+}
+
+export async function saveLiveMode(enabled: boolean): Promise<void> {
+  try {
+    await AsyncStorage.setItem(LIVE_KEY, enabled ? "1" : "0");
+  } catch {
+    // best-effort persistence only
+  }
+}
+
+export async function saveVoiceConfirm(enabled: boolean): Promise<void> {
+  try {
+    await AsyncStorage.setItem(VOICE_CONFIRM_KEY, enabled ? "1" : "0");
+  } catch {
+    // best-effort persistence only
+  }
+}
+
 /** Linear resample. The browser is free to ignore a requested sample rate —
  *  Safari commonly gives 48 kHz whatever you ask for — so the conversion has
  *  to happen here rather than being assumed away. */
@@ -87,7 +150,9 @@ function resample(input: Float32Array, from: number, to: number): Float32Array {
   return out;
 }
 
-function encodeWav(samples: Float32Array, sampleRate: number): Blob {
+/** Shared with the live session, which buffers a turn's audio for the same
+ *  reason this exists: one format, known to be accepted, on every browser. */
+export function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
   const view = new DataView(buffer);
   const ascii = (offset: number, text: string) => {
@@ -203,6 +268,17 @@ export class VoiceRecorder {
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
+
+    // cancel() may have run while that was pending — a conversation ended, the
+    // app locked, the screen unmounted. It had nothing to release at the time,
+    // because the stream did not exist yet; it does now, and nobody is holding
+    // it any more. Left alone it stays open forever and the browser goes on
+    // showing the tab as recording.
+    if (this.stopping) {
+      this.stream.getTracks().forEach((track) => track.stop());
+      this.stream = null;
+      throw new VoiceUnavailableError("cancelled before it started");
+    }
 
     const Ctor = window.AudioContext || (window as any).webkitAudioContext;
     try {

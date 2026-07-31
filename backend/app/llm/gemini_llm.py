@@ -12,7 +12,12 @@ from google import genai
 from google.genai import types
 
 from app.config import get_settings
-from app.llm.prompt import build_system_prompt, confirmation_payload, sanitize_history
+from app.llm.prompt import (
+    MAX_TOOL_ROUNDS,
+    build_system_prompt,
+    confirmation_payload,
+    sanitize_history,
+)
 from app.tesla.adapter import TeslaAdapter
 from app.tools import TOOLS, dispatch
 
@@ -77,13 +82,26 @@ class GeminiOrchestrator:
         tool_trace: list[dict[str, Any]] = []
         config = self._config(language)
 
-        while True:
+        # Bounded rather than `while True`: the number of rounds is decided by
+        # model output, so an unbounded loop is an unbounded spend of quota and
+        # of car wake-ups, reachable from one question.
+        for _ in range(MAX_TOOL_ROUNDS):
             resp = await self.client.aio.models.generate_content(
                 model=self.settings.gemini_model,
                 contents=contents,
                 config=config,
             )
-            model_content = resp.candidates[0].content
+            # A safety block or a hit token ceiling comes back well-formed with
+            # no candidates at all. Indexing it raised IndexError, which reached
+            # the user as a bodyless 502 — indistinguishable from the backend
+            # being down, when in fact the model answered and we discarded it.
+            candidate = (resp.candidates or [None])[0]
+            if candidate is None or candidate.content is None:
+                reason = getattr(candidate, "finish_reason", None) or getattr(
+                    resp, "prompt_feedback", None
+                )
+                raise RuntimeError(f"The model returned no answer ({reason or 'no reason given'}).")
+            model_content = candidate.content
             # Echo the model turn (incl. any function_call parts) into history.
             contents.append(model_content.model_dump(mode="json", exclude_none=True))
 
@@ -92,6 +110,12 @@ class GeminiOrchestrator:
                 return {"reply": resp.text or "", "history": contents, "tool_trace": tool_trace}
 
             # Execute every requested tool; return all responses in one user turn.
+            #
+            # Sequentially, and that is a decision rather than an oversight:
+            # FleetImpl shares an "awake" cache and a wake-and-retry across
+            # calls, so two concurrent commands would race to wake one car, and
+            # actions._pending is a shared dict. The latency saved is not worth
+            # the class of bug bought.
             parts: list[dict[str, Any]] = []
             for fc in calls:
                 args = dict(fc.args or {})
@@ -115,3 +139,20 @@ class GeminiOrchestrator:
                     tool_trace.append({"tool": fc.name, "input": args, "ok": False})
 
             contents.append({"role": "user", "parts": parts})
+
+        # Out of rounds. The tools that did run have already run, so say what
+        # happened rather than pretending the turn produced nothing — and drop
+        # the unanswered call, which would otherwise poison the next turn.
+        while contents and contents[-1].get("role") == "model":
+            contents.pop()
+        return {
+            "reply": (
+                "Zatrzymałem się po kilku krokach, żeby nie kręcić się w kółko. "
+                "Powiedz, co dokładnie mam zrobić."
+                if (language or "").lower() == "pl"
+                else "I stopped after several steps to avoid going in circles. "
+                "Tell me exactly what you'd like me to do."
+            ),
+            "history": contents,
+            "tool_trace": tool_trace,
+        }

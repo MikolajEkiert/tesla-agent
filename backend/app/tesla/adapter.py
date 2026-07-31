@@ -66,6 +66,14 @@ class TeslaAdapter(ABC):
 
     # --- navigation ---
     @abstractmethod
+    async def set_route(self, stops: list[dict[str, Any]]) -> dict[str, Any]:
+        """Ordered waypoints: [{'latitude', 'longitude', 'label'?}, ...].
+
+        Separate from set_navigation_destination because the car takes them by
+        different commands — coordinates with an order, versus a shared string
+        Tesla geocodes itself."""
+
+    @abstractmethod
     async def set_navigation_destination(self, address: str) -> dict[str, Any]:
         """Free-text address/place name; Tesla geocodes it server-side."""
 
@@ -78,9 +86,32 @@ class TeslaAdapter(ABC):
         """Where the car is: coordinates plus a human-readable address."""
 
     # --- native scheduling / comfort (run in the car, not on our server) ---
+    #
+    # Tesla marks the old single-setting commands as not recommended from
+    # firmware 2024.26; these replace them. Schedules have identities and repeat
+    # on chosen days, so turning one off means removing it by id rather than
+    # flipping a flag — hence list_schedules being part of the interface rather
+    # than a convenience.
     @abstractmethod
-    async def set_scheduled_charging(self, enable: bool, minutes_after_midnight: int) -> dict[str, Any]:
-        """Daily start time for charging, in the car's own local time."""
+    async def list_schedules(self) -> dict[str, Any]:
+        """Charge and preconditioning schedules the car is holding."""
+
+    @abstractmethod
+    async def add_charge_schedule(
+        self, minutes_after_midnight: int, days: str, one_time: bool, schedule_id: int | None
+    ) -> dict[str, Any]:
+        """Start charging at this time. Bound to where the car is now, so it
+        applies at that place — usually home."""
+
+    @abstractmethod
+    async def add_precondition_schedule(
+        self, minutes_after_midnight: int, days: str, one_time: bool, schedule_id: int | None
+    ) -> dict[str, Any]:
+        """Be warm and ready to leave at this time, same place-binding."""
+
+    @abstractmethod
+    async def remove_schedule(self, kind: str, schedule_id: int) -> dict[str, Any]:
+        """kind in {charge, precondition}."""
 
     @abstractmethod
     async def set_cabin_overheat_protection(self, on: bool, fan_only: bool = False) -> dict[str, Any]: ...
@@ -114,15 +145,29 @@ class TeslaAdapter(ABC):
         """Current draw while charging. The lever that matters on a weak
         domestic circuit, where the car's default would trip a breaker."""
 
-    @abstractmethod
-    async def set_scheduled_departure(
-        self, enable: bool, minutes_after_midnight: int, precondition: bool
-    ) -> dict[str, Any]:
-        """Be charged and warm by a time, letting the car work out when to
-        start — as opposed to set_scheduled_charging, which says when to
-        begin and leaves the arithmetic to you."""
-
     # --- comfort ---
+    @abstractmethod
+    async def set_preconditioning_max(self, on: bool) -> dict[str, Any]:
+        """Max defrost — everything at full to clear glass fast."""
+
+    @abstractmethod
+    async def set_cop_temp(self, level: str) -> dict[str, Any]:
+        """level in {low, medium, high}: the threshold cabin overheat
+        protection acts at, as opposed to whether it is on at all."""
+
+    # --- diagnostics the car keeps ---
+    @abstractmethod
+    async def recent_alerts(self) -> dict[str, Any]:
+        """What the car itself has been complaining about."""
+
+    @abstractmethod
+    async def release_notes(self) -> dict[str, Any]:
+        """What a pending or just-installed update actually changes."""
+
+    @abstractmethod
+    async def charging_history(self) -> dict[str, Any]:
+        """Past charging sessions with what they cost."""
+
     @abstractmethod
     async def set_steering_wheel_heater(self, on: bool) -> dict[str, Any]:
         """Cars without the hardware reject this; the error is relayed rather

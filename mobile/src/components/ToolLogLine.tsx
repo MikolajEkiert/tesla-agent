@@ -1,22 +1,33 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
-import { color, font, space } from "../theme";
+import { color, space, type } from "../theme";
 import { describeTool } from "../toolMeta";
 import type { ToolCall } from "../types";
+import { RAIL_GUTTER, railStyles } from "./rail";
 
 /**
- * Renders one tool call as an instrument-log entry — the app's signature
- * device: the chat surfaces the car's own event log reacting in real time,
- * not hidden system chrome.
+ * One thing the assistant did to the car, on the system rail.
+ *
+ * These used to be little grey pills floating in the transcript, which read as
+ * chrome — something the app was doing, rather than something the car was. Now
+ * they hang off a hairline that runs down into the reply below them, so a turn
+ * reads as one event: these systems were touched, and this is what came of it.
+ * The dot is the only colour, and it says which system.
  */
 export function ToolLogLine({ call }: { call: ToolCall }) {
   const { system, dot, text } = describeTool(call.tool, call.input, call.ok);
   return (
     <View style={styles.row}>
-      <View style={[styles.dot, { backgroundColor: dot }]} />
-      <Text style={styles.system}>{system}</Text>
-      <Text style={styles.arrow}>·</Text>
-      <Text style={styles.text}>{text}</Text>
+      <View style={railStyles.gutter}>
+        <View style={railStyles.line} />
+        <View style={[styles.dot, { backgroundColor: dot }]} />
+      </View>
+      <View style={styles.body}>
+        <Text style={styles.system}>{system}</Text>
+        <Text style={styles.text} numberOfLines={2}>
+          {text}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -24,35 +35,33 @@ export function ToolLogLine({ call }: { call: ToolCall }) {
 const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: space.xs,
     paddingVertical: 3,
-    paddingHorizontal: space.md,
-    marginVertical: 2,
-    alignSelf: "flex-start",
-    backgroundColor: color.surface,
-    borderRadius: 6,
   },
   dot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    marginRight: 2,
+    position: "absolute",
+    // Centred on the rail, and on the cap height of the label beside it.
+    left: RAIL_GUTTER / 2 - 4,
+    top: 5,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: color.bg,
+  },
+  body: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: space.sm,
+    paddingVertical: 1,
   },
   system: {
-    fontFamily: font.mono,
-    fontSize: 11,
-    letterSpacing: 1,
+    ...type.eyebrow,
     color: color.textSecondary,
   },
-  arrow: {
-    fontFamily: font.mono,
-    fontSize: 11,
-    color: color.textTertiary,
-  },
   text: {
-    fontFamily: font.mono,
-    fontSize: 11,
+    ...type.caption,
     color: color.textTertiary,
+    flexShrink: 1,
   },
 });

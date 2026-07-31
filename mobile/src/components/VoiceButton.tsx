@@ -169,7 +169,6 @@ const styles = StyleSheet.create({
   wrap: {
     width: 44,
     height: 44,
-    marginLeft: 8,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -185,9 +184,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: radius.pill,
-    backgroundColor: color.surfaceRaised,
-    borderWidth: 1,
-    borderColor: color.hairline,
+    backgroundColor: color.surfaceHover,
     alignItems: "center",
     justifyContent: "center",
     // Without this a press-and-hold on iOS raises the text-selection callout
@@ -198,7 +195,6 @@ const styles = StyleSheet.create({
   },
   buttonRecording: {
     backgroundColor: color.brand,
-    borderColor: color.brand,
   },
   buttonDisabled: {
     opacity: 0.5,
@@ -212,7 +208,7 @@ const styles = StyleSheet.create({
     width: 7,
     height: 11,
     borderRadius: 3.5,
-    backgroundColor: color.textSecondary,
+    backgroundColor: color.textPrimary,
   },
   arc: {
     width: 13,
@@ -222,12 +218,12 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 7,
     borderWidth: 1.5,
     borderTopWidth: 0,
-    borderColor: color.textSecondary,
+    borderColor: color.textPrimary,
   },
   stem: {
     width: 1.5,
     height: 2,
-    backgroundColor: color.textSecondary,
+    backgroundColor: color.textPrimary,
   },
   glyphActive: {
     backgroundColor: color.bg,

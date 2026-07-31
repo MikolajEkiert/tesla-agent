@@ -82,17 +82,57 @@ export async function lock(): Promise<void> {
   if (!res.ok) throw new BackendError(await errorDetail(res));
 }
 
-/** A sensitive command the assistant proposed; only a tap executes it. */
-export interface PendingAction {
-  tool: string;
-  args: Record<string, unknown>;
+/**
+ * Throw the proposal away when the owner declines it.
+ *
+ * "Cancel" used to be purely cosmetic — the card hid itself and the command
+ * stayed parked and tappable until it expired. Best-effort on purpose: the
+ * card has already settled by the time this runs, and a failed discard leaves
+ * a proposal that expires by itself in under two minutes, which is not worth
+ * an error message over a decision the owner has already made.
+ */
+export async function discardAction(token: string): Promise<void> {
+  try {
+    await fetch(`${DEFAULT_BASE_URL}/actions/pending/${encodeURIComponent(token)}`, {
+      ...CREDENTIALS,
+      method: "DELETE",
+    });
+  } catch {
+    // offline, or the session lapsed — the TTL is the backstop
+  }
 }
 
-export async function fetchPendingAction(token: string): Promise<PendingAction> {
-  const res = await fetch(
-    `${DEFAULT_BASE_URL}/actions/pending/${encodeURIComponent(token)}`,
-    CREDENTIALS
-  );
+/** What the server made of a spoken answer to a confirmation card. */
+export interface VoiceConfirmResult {
+  ok: boolean;
+  outcome?: "no_match" | "cancelled" | "no_speech";
+  tool?: string;
+}
+
+/**
+ * Send the recording straight to the confirmation route instead of the
+ * transcriber.
+ *
+ * The audio never goes near /chat, so the assistant is not told a word was
+ * said and cannot act on it — the server matches the phrase in code and either
+ * runs the parked command or does not. See backend/app/confirm_phrase.py.
+ */
+export async function confirmByVoice(
+  audio: Blob,
+  token: string,
+  language: string
+): Promise<VoiceConfirmResult> {
+  const query = `?token=${encodeURIComponent(token)}&language=${encodeURIComponent(language)}`;
+  const res = await fetch(`${DEFAULT_BASE_URL}/actions/confirm/voice${query}`, {
+    ...CREDENTIALS,
+    method: "POST",
+    headers: { "content-type": audio.type || "audio/wav" },
+    body: audio,
+  });
+  // 409 means the proposal is no longer voice-settleable — expired, already
+  // tried, ambiguous, or tap-only. That is an answer, not a failure: the card
+  // is still on screen and still tappable.
+  if (res.status === 409) return { ok: false, outcome: "no_match" };
   await guard(res);
   return res.json();
 }
@@ -175,6 +215,72 @@ export async function fetchSpeech(
   });
   await guard(res);
   return res.blob();
+}
+
+export interface LiveToken {
+  token: string;
+  model: string;
+  expires_in_seconds: number;
+  /** Gemini function declarations, minted with the token — see fetchLiveToken. */
+  tools: Record<string, unknown>[];
+}
+
+/**
+ * A one-use credential for the phone's own audio session.
+ *
+ * Short-lived and bound server-side to one model, one configuration and one
+ * tool list, so what arrives here cannot be turned into anything else. The
+ * tools come back with it only so the client can repeat them in its own setup
+ * message; they are already bound to the token. See backend/app/live.py.
+ */
+export async function fetchLiveToken(
+  voice: string,
+  language?: string,
+  /** A model that minted a token and then refused the session — ask for a
+   *  different one. Only this side ever sees that happen. */
+  avoid?: string
+): Promise<LiveToken> {
+  const res = await fetch(`${DEFAULT_BASE_URL}/voice/live-token`, {
+    ...CREDENTIALS,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ voice, language, avoid }),
+  });
+  await guard(res);
+  return res.json();
+}
+
+/** What running one of the live session's tool calls produced. */
+export interface LiveToolResult {
+  ok: boolean;
+  /** What to hand back to the model. Absent when the call failed. */
+  result?: Record<string, unknown>;
+  /** Why it failed, in the model's own terms, so it can say so or try again. */
+  error?: string;
+  /** The command was parked instead of executed — raise a card for it. The
+   *  token stays out of the model's context on purpose (see backend). */
+  confirm?: { token: string; tool: string; args: Record<string, unknown> } | null;
+}
+
+/**
+ * Execute a tool the live audio session asked for.
+ *
+ * The live conversation runs between the phone and Google; this call is the
+ * only point at which it touches the car, and it goes through the same
+ * dispatch — and the same confirmation gate — as anything typed into the chat.
+ */
+export async function runLiveTool(
+  name: string,
+  args: Record<string, unknown>
+): Promise<LiveToolResult> {
+  const res = await fetch(`${DEFAULT_BASE_URL}/live/tool`, {
+    ...CREDENTIALS,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name, args }),
+  });
+  await guard(res);
+  return res.json();
 }
 
 export async function fetchVoices(): Promise<{ voices: string[]; default: string }> {

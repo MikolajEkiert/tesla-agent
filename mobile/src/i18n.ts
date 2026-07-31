@@ -22,6 +22,26 @@ const STRINGS = {
     disconnectCancel: "Cancel",
     disconnectConfirm: "Disconnect",
     errorUnreachable: "Couldn't reach Amp's backend. Is it running?",
+    errorRetry: "Try again",
+    errorDismiss: "Dismiss",
+    sendMessage: "Send",
+    speakMessage: "Read aloud",
+    resendMessage: "Ask again",
+    chatRename: "Rename",
+    confirmEyebrow: "Needs your go-ahead",
+    // The four things people actually ask a car in a car park, phrased exactly
+    // as they are sent — tapping one teaches you what you could have said.
+    chipWarm: "Warm the car to 21°C",
+    chipRange: "How much range do I have?",
+    chipCharger: "Nearest Supercharger",
+    chipLock: "Lock the car",
+    chatDeleteTitle: "Delete this chat?",
+    chatDeleteBody: "The conversation is removed from this device for good.",
+    chatDeleteConfirm: "Delete",
+    copied: "Copied",
+    copyMessage: "Copy message",
+    scrollToLatest: "Jump to latest",
+    charging: "charging",
     asleep: "asleep",
     staleJustNow: "just now",
     locked: "locked",
@@ -34,6 +54,13 @@ const STRINGS = {
     langEnglish: "English",
     langPolish: "Polski",
     menu: "Menu",
+    chatsTitle: "Chats",
+    chatsEmpty: "No saved chats yet",
+    chatNew: "New chat",
+    chatUntitled: "Untitled",
+    heardApprox: "heard",
+    chatToday: "today",
+    chatYesterday: "yesterday",
     queueTitle: "Scheduled",
     queueEmpty: "Nothing scheduled",
     queueClimate: "Climate",
@@ -67,11 +94,16 @@ const STRINGS = {
     confirmNo: "Cancel",
     confirmExecuted: "Confirmed and sent to the car.",
     confirmDismissed: "Cancelled — nothing was sent.",
+    confirmSettledDone: "Sent to the car: {what}",
+    confirmSettledDismissed: "Cancelled: {what}",
+    confirmExpiresIn: "expires in {n} s",
+    confirmExpired: "Expired — ask again to get a fresh confirmation.",
     confirmUnlock: "unlock the car",
     confirmTrunk: "open the trunk",
     confirmHomelink: "trigger HomeLink (garage/gate)",
     confirmWindows: "move the windows",
     confirmSentry: "change Sentry Mode",
+    confirmUpdate: "install the software update",
     passkeyPasscodePrompt: "Enter your passcode to set up Face ID",
     voiceHold: "Hold to speak",
     voiceListening: "Listening…",
@@ -108,6 +140,18 @@ const STRINGS = {
     conversationBargeInOff: "Tap only",
     conversationBargeInHint:
       "\"By voice\" keeps the microphone open while the assistant talks, so starting to speak cuts it off — same as Grok or Gemini. It relies on the phone's own echo cancellation, which isn't equally good on every phone and speaker. If replies start cutting themselves off for no reason, switch to \"Tap only\".",
+    voiceConfirmSection: "Confirming by voice",
+    voiceConfirmOn: "Say \"confirm\"",
+    voiceConfirmOff: "Tap only",
+    voiceConfirmHint:
+      "In a conversation, say \"confirm\" to approve what's waiting instead of reaching for the screen. Unlocking the car always needs a tap. Anyone within earshot can say the word too, so turn this off if you often drive with passengers.",
+    voiceConfirmSpoken: "Say \"confirm\" or tap",
+    voiceConfirmMissed: "I didn't catch that — tap to confirm.",
+    liveSection: "Conversation mode",
+    liveOn: "Live audio",
+    liveOff: "Recordings",
+    liveHint:
+      "\"Live audio\" streams the conversation both ways: your words are recognised as you speak them and the reply starts before it's finished being made. It's a separate assistant from the one you type to — same commands, same confirmation cards, but its own memory of what was said, so it won't know about a typed exchange and the other way round. \"Recordings\" is the older path — slower, and it answers in the typed assistant's own thread, but it only needs a working request rather than a connection held open, so it's the one to fall back to on a bad signal.",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -125,6 +169,24 @@ const STRINGS = {
     disconnectCancel: "Anuluj",
     disconnectConfirm: "Odłącz",
     errorUnreachable: "Nie można połączyć się z backendem Amp. Czy jest uruchomiony?",
+    errorRetry: "Ponów",
+    errorDismiss: "Zamknij",
+    sendMessage: "Wyślij",
+    speakMessage: "Przeczytaj na głos",
+    resendMessage: "Zapytaj ponownie",
+    chatRename: "Zmień nazwę",
+    confirmEyebrow: "Czeka na Twoją zgodę",
+    chipWarm: "Nagrzej auto do 21°C",
+    chipRange: "Ile mam zasięgu?",
+    chipCharger: "Najbliższy Supercharger",
+    chipLock: "Zablokuj auto",
+    chatDeleteTitle: "Usunąć ten czat?",
+    chatDeleteBody: "Rozmowa zniknie z tego urządzenia na dobre.",
+    chatDeleteConfirm: "Usuń",
+    copied: "Skopiowano",
+    copyMessage: "Kopiuj wiadomość",
+    scrollToLatest: "Przejdź na dół",
+    charging: "ładowanie",
     asleep: "uśpiony",
     staleJustNow: "przed chwilą",
     locked: "zablokowany",
@@ -137,6 +199,13 @@ const STRINGS = {
     langEnglish: "English",
     langPolish: "Polski",
     menu: "Menu",
+    chatsTitle: "Czaty",
+    chatsEmpty: "Brak zapisanych czatów",
+    chatNew: "Nowy czat",
+    chatUntitled: "Bez tytułu",
+    heardApprox: "usłyszane",
+    chatToday: "dziś",
+    chatYesterday: "wczoraj",
     queueTitle: "Zaplanowane",
     queueEmpty: "Nic nie zaplanowano",
     queueClimate: "Klimatyzacja",
@@ -170,11 +239,16 @@ const STRINGS = {
     confirmNo: "Anuluj",
     confirmExecuted: "Potwierdzone i wysłane do auta.",
     confirmDismissed: "Anulowane — nic nie wysłano.",
+    confirmSettledDone: "Wysłane do auta: {what}",
+    confirmSettledDismissed: "Anulowane: {what}",
+    confirmExpiresIn: "wygasa za {n} s",
+    confirmExpired: "Ważność minęła — poproś ponownie o potwierdzenie.",
     confirmUnlock: "otworzyć auto",
     confirmTrunk: "otworzyć bagażnik",
     confirmHomelink: "uruchomić HomeLink (brama/garaż)",
     confirmWindows: "ruszyć szybami",
     confirmSentry: "zmienić Sentry Mode",
+    confirmUpdate: "zainstalować aktualizację oprogramowania",
     passkeyPasscodePrompt: "Podaj kod dostępu, aby włączyć Face ID",
     voiceHold: "Przytrzymaj, aby mówić",
     voiceListening: "Słucham…",
@@ -211,6 +285,18 @@ const STRINGS = {
     conversationBargeInOff: "Tylko dotknięciem",
     conversationBargeInHint:
       "„Głosem” trzyma mikrofon otwarty, gdy asystent mówi, więc zaczęcie mówienia go przerywa — tak jak w Groku czy Gemini. Polega na anulowaniu echa w telefonie, które nie na każdym telefonie i głośniku działa tak samo dobrze. Jeśli odpowiedzi zaczną się urywać bez powodu, przełącz na „Tylko dotknięciem”.",
+    voiceConfirmSection: "Potwierdzanie głosem",
+    voiceConfirmOn: "Powiedz „potwierdzam”",
+    voiceConfirmOff: "Tylko dotknięciem",
+    voiceConfirmHint:
+      "W rozmowie powiedz „potwierdzam”, żeby zatwierdzić to, co czeka, zamiast sięgać po ekran. Otwarcie auta zawsze wymaga dotknięcia. To słowo może wypowiedzieć każdy w zasięgu głosu, więc wyłącz to, jeśli często wozisz pasażerów.",
+    voiceConfirmSpoken: "Powiedz „potwierdzam” albo dotknij",
+    voiceConfirmMissed: "Nie zrozumiałem — dotknij, żeby potwierdzić.",
+    liveSection: "Tryb rozmowy",
+    liveOn: "Na żywo",
+    liveOff: "Nagrania",
+    liveHint:
+      "„Na żywo” przesyła rozmowę strumieniem w obie strony: Twoje słowa są rozpoznawane w trakcie mówienia, a odpowiedź zaczyna płynąć, zanim powstanie w całości. To osobny asystent od tego, do którego piszesz — te same polecenia i te same karty potwierdzeń, ale własna pamięć rozmowy, więc nie wie, co padło w czacie tekstowym, i odwrotnie. „Nagrania” to starsza droga — wolniejsza i odpowiada w wątku czatu tekstowego, ale wymaga tylko udanego żądania zamiast trzymanego połączenia, więc to na nią warto wrócić przy słabym zasięgu.",
   },
 } as const;
 
@@ -257,13 +343,28 @@ export function t(
   );
 }
 
-/** Time-of-day greeting — replaces a greeting that used to always say "evening". */
-export function greeting(language: Language, hour: number): string {
+/**
+ * The two halves of the opening line, kept apart.
+ *
+ * The empty chat sets them as one heading in two tones — the greeting bright,
+ * the question underneath it quiet — so they are returned separately rather
+ * than pre-joined into a sentence a layout would then have to take apart.
+ */
+export function greetingParts(
+  language: Language,
+  hour: number
+): { greeting: string; question: string } {
   const part =
     hour >= 5 && hour < 12
       ? "greetingMorning"
       : hour >= 12 && hour < 18
       ? "greetingAfternoon"
       : "greetingEvening";
-  return `${t(language, part)}. ${t(language, "greetingSuffix")}`;
+  return { greeting: t(language, part), question: t(language, "greetingSuffix") };
+}
+
+/** Time-of-day greeting as one sentence, for anywhere that wants it whole. */
+export function greeting(language: Language, hour: number): string {
+  const parts = greetingParts(language, hour);
+  return `${parts.greeting}. ${parts.question}`;
 }

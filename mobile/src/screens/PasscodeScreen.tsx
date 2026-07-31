@@ -11,8 +11,9 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BackendError, loginWithPasskey, passkeysSupported, unlock } from "../api";
+import { AmpMark } from "../components/AmpMark";
 import { useLanguage } from "../LanguageContext";
-import { color, font, radius, space } from "../theme";
+import { color, font, radius, space, type } from "../theme";
 
 /**
  * Gates the app until the passcode is entered. Distinct from ConnectScreen,
@@ -83,7 +84,9 @@ export function PasscodeScreen({
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <View style={styles.content}>
-          <View style={styles.bolt} />
+          <View style={styles.mark}>
+            <AmpMark size={40} />
+          </View>
           <Text style={styles.brand}>AMP</Text>
           <Text style={styles.headline}>{t("passcodeHeadline")}</Text>
           <Text style={styles.body}>{t("passcodeBody")}</Text>
@@ -160,36 +163,37 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   content: {
     flex: 1,
+    width: "100%",
+    maxWidth: 420,
+    alignSelf: "center",
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: space.xxl,
+    paddingHorizontal: space.xl,
   },
-  bolt: {
-    width: 40,
-    height: 40,
+  // The mark carries the accent on its own here, with nothing behind it. A
+  // tile around it made the lock screen look like an app-store listing.
+  mark: {
     marginBottom: space.lg,
-    backgroundColor: color.brand,
-    borderRadius: radius.sm,
-    transform: [{ rotate: "12deg" }],
   },
   brand: {
     fontFamily: font.displayBold,
-    fontSize: 14,
+    fontSize: 13,
     letterSpacing: 4,
-    color: color.textSecondary,
+    color: color.textTertiary,
     marginBottom: space.xl,
   },
   headline: {
-    fontFamily: font.display,
-    fontSize: 24,
+    ...type.hero,
+    fontSize: 26,
+    lineHeight: 32,
     color: color.textPrimary,
     textAlign: "center",
     marginBottom: space.sm,
   },
   body: {
-    fontFamily: font.body,
-    fontSize: 14,
-    lineHeight: 20,
+    ...type.body,
+    fontSize: 15,
+    lineHeight: 22,
     color: color.textSecondary,
     textAlign: "center",
     marginBottom: space.xl,
@@ -197,13 +201,12 @@ const styles = StyleSheet.create({
   input: {
     width: "100%",
     backgroundColor: color.surfaceRaised,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: color.hairline,
     paddingHorizontal: space.lg,
-    paddingVertical: space.md,
-    fontFamily: font.body,
-    fontSize: 16,
+    paddingVertical: space.lg,
+    ...type.body,
     color: color.textPrimary,
     marginBottom: space.md,
     ...(Platform.OS === "web" ? { outlineWidth: 0 } : {}),
@@ -216,16 +219,15 @@ const styles = StyleSheet.create({
   errorBox: {
     width: "100%",
     paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    borderRadius: radius.sm,
-    backgroundColor: "rgba(226,86,79,0.12)",
+    paddingVertical: space.md,
+    borderRadius: radius.md,
+    backgroundColor: color.alertSoft,
     borderWidth: 1,
     borderColor: color.alert,
     marginBottom: space.md,
   },
   errorText: {
-    fontFamily: font.mono,
-    fontSize: 12,
+    ...type.caption,
     color: color.alert,
   },
   button: {
@@ -238,8 +240,7 @@ const styles = StyleSheet.create({
   },
   buttonMuted: { backgroundColor: color.brandDim },
   divider: {
-    fontFamily: font.mono,
-    fontSize: 11,
+    ...type.caption,
     color: color.textTertiary,
     marginVertical: space.md,
   },

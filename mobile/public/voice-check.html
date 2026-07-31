@@ -132,6 +132,21 @@
     <button id="heardYes" class="ghost">Słyszałem &lt;audio&gt; na wyciszeniu ✓</button>
     <button id="heardNo" class="ghost">Nie słyszałem nic ✗</button>
 
+    <h2>6 · Web Audio z sesją „playback"</h2>
+    <section id="session"></section>
+    <button id="playSession">Odtwórz 4 s przez Web Audio (sesja playback)</button>
+    <div class="sub" style="margin-top:4px">
+      Ten pomiar decyduje o strumieniowej mowie. Dźwięk płynący na żywo
+      (Gemini Live) da się odtworzyć <b>tylko</b> przez Web Audio, a ten w
+      punkcie 5 przy wyciszeniu milczał. Tutaj przed odtworzeniem ustawiamy
+      jawnie <code>navigator.audioSession.type = "playback"</code>, czyli
+      mówimy systemowi, że to jest odtwarzanie multimediów, a nie powiadomienie.
+      <br />Znowu: <b>boczny przełącznik w pozycji cichej</b>, potem zaznacz,
+      czy było słychać.
+    </div>
+    <button id="sessionYes" class="ghost">Słyszałem Web Audio na wyciszeniu ✓</button>
+    <button id="sessionNo" class="ghost">Nie słyszałem nic ✗</button>
+
     <h2>Wynik</h2>
     <pre id="out">…</pre>
     <button id="copy" class="ghost">Skopiuj wynik</button>
@@ -447,6 +462,78 @@
       }
       document.getElementById("heardYes").onclick = () => recordHeard(true);
       document.getElementById("heardNo").onclick = () => recordHeard(false);
+
+      /**
+       * The measurement that decides whether streamed speech is usable here.
+       *
+       * Live audio arrives as a run of raw PCM chunks, and the only way to
+       * play a stream that is still arriving is Web Audio — which section 5
+       * may well have shown going silent under the ringer switch. The
+       * AudioSession API exists for exactly this: declaring the tab's audio to
+       * be playback rather than a notification bleep. Whether declaring it
+       * actually lifts the mute for *Web Audio* is the open question; we have
+       * only ever measured the element path.
+       *
+       * Deliberately a separate button from section 5 so the two answers
+       * cannot be confused for one another.
+       */
+      document.getElementById("playSession").onclick = async function () {
+        const btn = this;
+        btn.disabled = true;
+        try {
+          let declared = "brak API";
+          try {
+            const session = navigator.audioSession;
+            if (session) {
+              session.type = "playback";
+              // Read it back rather than trusting the assignment: a
+              // silently-ignored property would otherwise look like success.
+              declared = String(session.type);
+            }
+          } catch (e) {
+            declared = "BŁĄD: " + ((e && e.message) || e);
+          }
+          add("session", "audioSessionType", declared, declared === "playback" ? "ok" : "warn");
+
+          const ctx = new AC();
+          if (ctx.state === "suspended") await ctx.resume();
+          add("session", "contextState", ctx.state, ctx.state === "running" ? "ok" : "bad");
+
+          // Same warble as section 5, so the two are compared like for like —
+          // built through Web Audio this time rather than decoded from a file.
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          const lfo = ctx.createOscillator();
+          const lfoGain = ctx.createGain();
+          lfo.frequency.value = 3;
+          lfoGain.gain.value = 220;
+          lfo.connect(lfoGain).connect(osc.frequency);
+          osc.frequency.value = 660;
+          gain.gain.value = 0.35;
+          osc.connect(gain).connect(ctx.destination);
+          osc.start();
+          lfo.start();
+          btn.textContent = "Gra… słuchaj";
+          await new Promise((r) => setTimeout(r, 4000));
+          osc.stop();
+          lfo.stop();
+          ctx.close();
+          add("session", "webAudioPlayed", "ok", "ok");
+          btn.textContent = "Odtwórz ponownie";
+        } catch (e) {
+          add("session", "sessionPlayError", String((e && e.message) || e), "bad");
+          btn.textContent = "Nie udało się — spróbuj ponownie";
+        }
+        btn.disabled = false;
+      };
+
+      function recordSessionHeard(heard) {
+        add("session", "webAudioHeardOnSilent", heard ? "TAK" : "NIE", heard ? "ok" : "bad");
+        document.getElementById("sessionYes").disabled = true;
+        document.getElementById("sessionNo").disabled = true;
+      }
+      document.getElementById("sessionYes").onclick = () => recordSessionHeard(true);
+      document.getElementById("sessionNo").onclick = () => recordSessionHeard(false);
 
       document.getElementById("copy").onclick = async function () {
         const text = JSON.stringify(results, null, 1);

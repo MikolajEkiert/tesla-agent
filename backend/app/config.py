@@ -26,6 +26,24 @@ class Settings:
     # they look interchangeable and are not.
     google_tts_api_key: str = os.getenv("GOOGLE_TTS_API_KEY", "")
 
+    # Google Places — searching for somewhere to eat, park or shop. A third
+    # Google key, and the warning above now applies three ways: these look
+    # interchangeable and are not. One API key can be granted several APIs, so
+    # this may be the same string as the TTS one — but only if that key's
+    # restrictions were widened to include Places, which is a deliberate act
+    # rather than something to assume.
+    google_places_api_key: str = os.getenv("GOOGLE_PLACES_API_KEY", "")
+
+    # Whether a spoken word may settle a confirmation card (never for unlock —
+    # see actions.VOICE_CONFIRMABLE). A server-side off switch as well as the
+    # in-app setting, so the capability can be withdrawn without shipping an
+    # app build.
+    voice_confirm_enabled: bool = os.getenv("AMP_VOICE_CONFIRM", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+
     # Anthropic (fallback provider)
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-opus-5")
