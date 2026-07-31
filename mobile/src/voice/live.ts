@@ -32,7 +32,11 @@
  */
 import { Platform } from "react-native";
 import { fetchLiveToken, runLiveTool } from "../api";
-import { encodeWav } from "./recorder";
+import { prepareForCapture } from "./audioSession";
+// The same door the recorder uses, so both paths declare the session and
+// survive a refused constraint identically. Two ways of opening a microphone
+// is how one of them ends up with a fix the other never got.
+import { encodeWav, openMicrophone } from "./recorder";
 
 /**
  * Not the endpoint the Live documentation shows, and the difference is the
@@ -244,10 +248,10 @@ export class LiveSession {
     if (!liveSupported()) throw new Error("live audio unsupported here");
 
     // Must happen inside the gesture that started the conversation, like every
-    // other audio path on iOS.
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-    });
+    // other audio path on iOS — and after saying what the session is for, since
+    // primeSpeech() has just declared `playback` from that same tap and a
+    // playback session cannot capture at all.
+    this.stream = await openMicrophone();
 
     // Twice at most, and the second time is not a retry of the same thing.
     //
@@ -755,12 +759,11 @@ export class LiveSession {
     if (!this.outputContext) {
       const Ctor = window.AudioContext || (window as any).webkitAudioContext;
       this.outputContext = new Ctor({ sampleRate: OUTPUT_RATE });
-      try {
-        const session = (navigator as any).audioSession;
-        if (session) session.type = "playback";
-      } catch {
-        // Nothing to do; the fallback path is the caller's business.
-      }
+      // Not `playback`, which is what this used to declare: a live session is
+      // holding the microphone open the whole time it is speaking, and a
+      // playback-only session cannot capture. Declaring it here killed the
+      // very stream this reply was an answer to.
+      prepareForCapture();
     }
     const context = this.outputContext!;
     const samples = new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2));

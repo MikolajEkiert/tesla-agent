@@ -24,6 +24,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 import { fetchSpeech } from "../api";
+import { prepareForPlayback } from "./audioSession";
 import { toPlainText } from "../markdown";
 import type { Language } from "../i18n";
 
@@ -192,9 +193,14 @@ export function primeSpeech(): void {
     // bleep, which is what earns the right to be heard with the ringer switch
     // silent. Measured as "auto" on iOS 18.7, meaning Safari was deciding for
     // us; saying it outright turns a behaviour we observed into one we asked
-    // for. Absent on every other browser, hence the guard.
-    const session = (navigator as any).audioSession;
-    if (session) session.type = "playback";
+    // for.
+    //
+    // It is only ever a starting position. This runs from every tap that might
+    // lead to speech — including the two that then open the microphone — and a
+    // `playback` session cannot capture at all. The capture paths raise it to
+    // `play-and-record` immediately before asking for the stream, which works
+    // because they ask after this has run, in the same gesture.
+    prepareForPlayback();
   } catch {
     // An unwritable property must not cost us the rest of the priming.
   }

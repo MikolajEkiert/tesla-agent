@@ -16,6 +16,7 @@
  * key already covers voice input.
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { prepareForCapture } from "./audioSession";
 import { BLOCK_SIZE, classifyBlock, HOP_SIZE, SPEECH_EVIDENCE, VOICE_PROFILE } from "./vad";
 
 export const SAMPLE_RATE = 16000;
@@ -48,7 +49,10 @@ export class NothingRecordedError extends Error {}
  * recorder wants, but a stereo 48 kHz one it downmixes is infinitely better
  * than no microphone at all.
  */
-async function openMicrophone(): Promise<MediaStream> {
+export async function openMicrophone(): Promise<MediaStream> {
+  // Before anything else: a page whose audio session is still set to `playback`
+  // — which primeSpeech() declares from this very tap — cannot capture at all.
+  prepareForCapture();
   try {
     return await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
