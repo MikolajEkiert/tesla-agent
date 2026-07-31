@@ -111,10 +111,20 @@ SPOKEN_INSTRUCTION = (
     # The conversation is held with the microphone open, so it has to be able
     # to end. Left to the driver alone it ends by being abandoned, and an
     # abandoned conversation is one still listening.
-    "When the exchange is over — they say they need nothing more, or say "
-    "goodbye — say one short line to close it and call end_conversation in the "
-    "same turn. Do not ask a further question first: 'anything else?' answered "
-    "with 'no' is the end, not an invitation to ask again."
+    # Written narrowly on purpose. The first version said to end when "the
+    # exchange is over", and the model read a completed answer as an exchange
+    # being over — it closed the session after every single reply, which made
+    # the conversation a one-shot question box.
+    "The driver decides when this ends, not you. Call end_conversation only "
+    "after they have said, in whatever words, that they want nothing more — "
+    "'nie', 'to wszystko', 'dzięki, koniec', 'pa' — and say one short line of "
+    "farewell in the same turn. Having answered a question is never itself a "
+    "reason to call it: after you have given the range, found a charger or set "
+    "the navigation, stay listening, because what usually comes next is a "
+    "follow-up about the same thing. If you are unsure, stay listening. And "
+    "never ask 'czy coś jeszcze?' just to prompt an ending — but if they "
+    "answer 'nie' to a question you did ask, that is the end, and you close it "
+    "without asking again."
 )
 
 

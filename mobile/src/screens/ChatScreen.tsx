@@ -570,12 +570,24 @@ export function ChatScreen({
       // Sending is an act of attention: whatever was being re-read, the answer
       // to this is what the driver now wants to see.
       atBottomRef.current = true;
+      // Which conversation this question belongs to.
+      //
+      // A reply takes seconds, and "New chat" takes one tap. Without this the
+      // answer to a question asked in one conversation was appended to
+      // whichever one happened to be on screen when it arrived — so a chat
+      // started while the previous one was still thinking opened with somebody
+      // else's reply in it, and then saved that under its own name.
+      const askedIn = chatIdRef.current;
       const rowId = id();
       setItems((prev) => [...prev, { kind: "message", id: rowId, role: "user", text }]);
       setPending(true);
       if (conversationTurn) enterPhase("thinking");
       try {
         const res = await sendMessage(text, history, language);
+        // The conversation moved on while this was in flight. The answer
+        // belongs to a chat nobody is looking at, and putting it anywhere else
+        // would be a lie about who said what.
+        if (chatIdRef.current !== askedIn) return;
         const replyId = id();
         setHistory(res.history);
         setItems((prev) => [
@@ -680,6 +692,10 @@ export function ChatScreen({
         // failure (fetch never got a response at all).
         if (e instanceof NotUnlockedError) {
           onLocked?.();
+        } else if (chatIdRef.current !== askedIn) {
+          // Same rule as the reply above: a failure belongs to the question
+          // that caused it, and that question is no longer on screen. Retrying
+          // it into a different conversation is the last thing anyone wants.
         } else {
           setError(e instanceof BackendError ? e.message : t("errorUnreachable"));
           // Keep the question, so the error bar can offer to ask it again. A
