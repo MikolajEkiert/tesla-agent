@@ -20,3 +20,4 @@ HANDOFF.md
 
 # Basic-auth credentials guarding the site (bcrypt hash)
 deploy/.env.auth
+backend/.env.*

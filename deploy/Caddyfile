@@ -38,6 +38,13 @@ tesla-amp.duckdns.org {
 		}
 		reverse_proxy api:8000
 	}
+	# The tool calls a live audio session makes. The conversation itself runs
+	# between the phone and Google; this is where it reaches the car, and it
+	# reaches it through the same dispatch and the same confirmation gate as
+	# the typed assistant.
+	handle /live/* {
+		reverse_proxy api:8000
+	}
 	handle /vehicle/* {
 		reverse_proxy api:8000
 	}

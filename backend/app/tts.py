@@ -25,10 +25,35 @@ llm/prompt.py, which chooses the words. This module only reads them.
 from __future__ import annotations
 
 import base64
+import hashlib
+import os
+import time
 
 import httpx
 
 from app.config import get_settings
+
+# --- the short things that get said over and over --------------------------
+#
+# The settings screen speaks a sample every time a voice is tapped, because a
+# list of names like "Iapetus" and "Umbriel" tells you nothing until you hear
+# it. Six voices in two languages is twelve possible samples, and flicking
+# through them used to bill Google once per tap, every time, forever.
+#
+# The endpoint already sends `cache-control: private, max-age=300`, which does
+# nothing at all here: it is a POST, and browsers do not cache POST responses.
+# The header has been reassuring and inert since it was written.
+#
+# So the cache lives on disk instead, which also makes it shared — the sample
+# is synthesised once for every device that will ever ask, rather than once per
+# device per five minutes. Only short texts, so a conversation's replies never
+# land here: they are said once and are not worth keeping, and the free box has
+# a small disk.
+CACHE_DIR = os.path.join("data", "tts-cache")
+CACHE_MAX_CHARS = 200
+# Twelve samples plus room for whatever else is short and repeated. Small
+# enough that the directory stays a cache rather than becoming an archive.
+CACHE_MAX_FILES = 64
 
 # The reply is a sentence or two by design (see llm/prompt.py). This cap is a
 # backstop against synthesising — and paying for — something pathological. Well
@@ -94,6 +119,45 @@ def _api_key() -> str:
     return get_settings().google_tts_api_key
 
 
+def _cache_key(spoken: str, locale: str, voice: str) -> str:
+    """Everything that changes the bytes, and nothing that doesn't."""
+    raw = f"{locale}|{voice}|{spoken}".encode()
+    return hashlib.sha256(raw).hexdigest()[:32]
+
+
+def _cache_read(key: str) -> bytes | None:
+    try:
+        path = os.path.join(CACHE_DIR, key)
+        with open(path, "rb") as f:
+            audio = f.read()
+        # Touched on read so eviction drops what nobody asks for rather than
+        # whatever happens to be oldest — the voice samples stay, a one-off
+        # phrase ages out.
+        os.utime(path, None)
+        return audio or None
+    except OSError:
+        return None
+
+
+def _cache_write(key: str, audio: bytes) -> None:
+    """Best-effort: a cache that cannot be written must not break speech."""
+    try:
+        os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
+        entries = [
+            (os.path.getatime(os.path.join(CACHE_DIR, n)), n) for n in os.listdir(CACHE_DIR)
+        ]
+        for _, name in sorted(entries)[: max(0, len(entries) - CACHE_MAX_FILES + 1)]:
+            os.unlink(os.path.join(CACHE_DIR, name))
+        # Written beside and renamed, so a reader never sees a half-written
+        # file — a truncated MP3 would be cached forever and play as silence.
+        tmp = os.path.join(CACHE_DIR, f".{key}.{os.getpid()}.{int(time.time())}")
+        with open(tmp, "wb") as f:
+            f.write(audio)
+        os.replace(tmp, os.path.join(CACHE_DIR, key))
+    except OSError:
+        pass
+
+
 async def synthesize(text: str, language: str | None = None, voice: str | None = None) -> bytes:
     if not _api_key():
         raise SpeechError("GOOGLE_TTS_API_KEY is not set — spoken replies need it.")
@@ -103,6 +167,12 @@ async def synthesize(text: str, language: str | None = None, voice: str | None =
         raise SpeechError("Nothing to speak")
 
     locale = _locale(language)
+    cacheable = len(spoken) <= CACHE_MAX_CHARS
+    key = _cache_key(spoken, locale, resolve_voice(voice)) if cacheable else ""
+    if cacheable:
+        cached = _cache_read(key)
+        if cached:
+            return cached
     body = {
         # Plain text, never SSML: a reply is model output, and handing model
         # output to a markup parser lets a stray "<" decide how the rest is
@@ -134,4 +204,6 @@ async def synthesize(text: str, language: str | None = None, voice: str | None =
     audio = base64.b64decode(resp.json().get("audioContent", "") or "")
     if not audio:
         raise SpeechError("Speech service returned no audio")
+    if cacheable:
+        _cache_write(key, audio)
     return audio

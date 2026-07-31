@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 
-from app import actions, confirm_phrase, live, scheduler, tts, voice
+from app import actions, confirm_phrase, live, scheduler, tools, tts, voice
 from app.auth import gate, passkey
 from app.config import get_settings
 from app.llm import build_orchestrator
@@ -418,6 +418,11 @@ async def voice_speak(req: VoiceSpeakRequest) -> Response:
 
 class LiveTokenRequest(BaseModel):
     voice: str | None = None
+    language: str | None = None
+    # A model that minted a token and then refused the session. The phone is
+    # the only party that sees that happen — from here the mint succeeded — so
+    # it has to say which one, or the retry asks for the same refusal.
+    avoid: str | None = None
 
 
 @app.post("/voice/live-token")
@@ -428,16 +433,60 @@ async def live_token(req: LiveTokenRequest) -> dict[str, Any]:
     reason /voice/speak isn't: a token holder standing next to a locked phone
     should not be able to open a metered stream on the owner's project.
 
-    The credential is bound to one model and one configuration server-side, so
-    what reaches the browser cannot be turned into anything else — and the
-    session it opens has no tools, so it can talk but not act.
+    The credential is bound to one model, one configuration and one tool list
+    server-side, so what reaches the browser cannot be turned into anything
+    else. The session it opens can act, but only through /live/tool below —
+    which is the same gate everything else goes through.
     """
     try:
-        return await live.mint_token(tts.resolve_voice(req.voice))
+        return await live.mint_token(tts.resolve_voice(req.voice), req.language, req.avoid)
     except live.LiveUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
+
+
+class LiveToolRequest(BaseModel):
+    name: str
+    args: dict[str, Any] | None = None
+
+
+@app.post("/live/tool")
+async def live_tool(req: LiveToolRequest) -> dict[str, Any]:
+    """Run one tool the live audio session asked for.
+
+    The live conversation happens between the phone and Google; this is the
+    only place it touches the car, and it touches it through `tools.dispatch` —
+    the same function the typed assistant calls. That is the whole point of
+    routing it here rather than letting the browser hold Tesla credentials:
+    voice and text get identical authority, including the part where a
+    physically consequential command is parked instead of executed.
+
+    A failure comes back as ok:false with a 200 rather than an error status.
+    The caller's job is to hand the model what happened so it can say so or try
+    something else — exactly as the chat loop feeds a failed tool call back —
+    and an HTTP error would instead look to the client like the backend falling
+    over mid-conversation.
+    """
+    args = req.args or {}
+    try:
+        result = await tools.dispatch(adapter, req.name, args)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    # The token never goes to the model. It has no way to spend one — it cannot
+    # make an HTTP request — but the model's context is the one place in this
+    # system that carries third-party text, and a confirmation token is the one
+    # value there that would be worth something to anybody who read it back out.
+    confirm: dict[str, Any] | None = None
+    if isinstance(result, dict) and result.get("confirmation_required"):
+        confirm = {
+            "token": result.get("confirm_token"),
+            "tool": req.name,
+            "args": args,
+        }
+        result = {k: v for k, v in result.items() if k != "confirm_token"}
+    return {"ok": True, "result": result, "confirm": confirm}
 
 
 @app.get("/voice/voices")

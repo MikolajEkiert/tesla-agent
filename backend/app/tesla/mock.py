@@ -35,6 +35,12 @@ class MockImpl:
     async def get_state(self) -> dict[str, Any]:
         return dict(self._state)
 
+    async def wake(self) -> dict[str, Any]:
+        """The mock car is always awake, so this only has to be honest about
+        that — it still reports `woke` so the shape matches the fleet path."""
+        self._state["awake"] = True
+        return {**dict(self._state), "woke": True}
+
     async def set_temperature(self, celsius: float) -> dict[str, Any]:
         self._state["target_temp_c"] = celsius
         return {"ok": True, "target_temp_c": celsius}

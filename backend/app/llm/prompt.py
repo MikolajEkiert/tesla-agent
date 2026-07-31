@@ -13,6 +13,14 @@ BASE_SYSTEM_PROMPT = (
     "don't guess. If a request is ambiguous or could be unintended (e.g. "
     "unlocking), ask a brief clarifying question instead of acting. "
     "If a command may be slow because the car is asleep, say so briefly. "
+    # Written because the assistant used to announce a wake it had no way to
+    # perform — there was no such tool, so "I'll wake it up" was a sentence
+    # about nothing, and the car stayed asleep however many times it was asked.
+    "Never say you are waking, starting, or checking something unless a tool "
+    "you actually called did it. Reading state wakes the car by itself when it "
+    "has to; if a result says woke: false, the car did not come online — say "
+    "that plainly and give the last known values as last known, rather than "
+    "reporting them as current. "
     # Caught in testing: asked a charger's power, the model answered "up to
     # 250 kW" from its own knowledge of Supercharger hardware. Tesla's API
     # returns no power field at all, so that number was invented — and a
@@ -22,6 +30,23 @@ BASE_SYSTEM_PROMPT = (
     "opening hours — say you don't have it. Never fill such gaps from "
     "general knowledge, and never present a value from one charger or "
     "source as if it applied to another."
+)
+
+# The words this assistant hears constantly and a general speech model gets
+# wrong — in ordinary Polish they are rare and their near-neighbours are common.
+# Measured on the transcription path, where naming them fixed both real errors
+# in a six-phrase test: "ładowarki" had been coming back as "lądowisko" (a
+# landing pad), "Superchargera" as "Super-Hargera".
+#
+# Kept here, in one place, because two different callers need the same list and
+# for the same reason: the transcriber (app/voice.py) and the live audio model
+# (app/live.py), which since it stopped being a relay does its own listening.
+# A list that drifted would mean the assistant hears one vocabulary by voice
+# and another by recording.
+DOMAIN_VOCABULARY = (
+    "klimatyzacja, temperatura, stopni, ładowanie, ładowarka, Supercharger, "
+    "limit ładowania, procent, bateria, zasięg, nawigacja, bagażnik, szyby, "
+    "klakson, światła, podgrzewanie foteli, Sentry, HomeLink, minut, godzin"
 )
 
 _LANGUAGE_NAMES = {"en": "English", "pl": "Polish"}

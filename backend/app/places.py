@@ -129,11 +129,55 @@ class GooglePlaces:
                 },
             )
         if response.status_code != 200:
-            detail = " ".join(response.text.split())[:200]
-            raise PlaceSearchUnavailable(
-                f"Place search returned HTTP {response.status_code}: {detail}"
-            )
+            raise PlaceSearchUnavailable(_explain(response))
         return response.json().get("places", []) or []
+
+
+def _explain(response: httpx.Response) -> str:
+    """Turn a provider refusal into one sentence the assistant can repeat.
+
+    This used to hand over 200 characters of raw JSON, and what came out the
+    other end was the assistant telling the owner that "place search is not
+    enabled in the car's system" — a sentence with nothing true in it. The car
+    has no idea this feature exists. The model was not lying so much as
+    summarising a wall of text it had no way to read, and picking the wrong
+    noun.
+
+    A short, specific message is the fix, because the model repeats what it is
+    given. Each case here says who has to do what: the ones the owner can act
+    on name the action, the rest say plainly that it is the provider's end.
+    """
+    try:
+        error = response.json().get("error", {}) or {}
+    except ValueError:
+        error = {}
+
+    reasons = {
+        detail.get("reason")
+        for detail in error.get("details", [])
+        if isinstance(detail, dict)
+    }
+    status = error.get("status", "")
+
+    if "SERVICE_DISABLED" in reasons:
+        # The exact case hit in production: a valid key on a project where the
+        # API was never switched on. Not a fault of the key, the car, or the
+        # app, and not something that fixes itself.
+        return (
+            "Place search is switched off at the provider: the Places API is not "
+            "enabled for this Google Cloud project. Tell the owner it has to be "
+            "enabled in the Google Cloud console — nothing is wrong with the car "
+            "or with the app, and trying again will not help until it is."
+        )
+    if response.status_code == 429 or status == "RESOURCE_EXHAUSTED":
+        return "Place search has used up its quota for now — it should work again later."
+    if response.status_code in (401, 403):
+        return (
+            "Place search was refused by the provider — the API key is rejected or "
+            "restricted. It needs looking at outside the app; retrying will not help."
+        )
+    detail = " ".join(str(error.get("message", "")).split())[:160]
+    return f"Place search failed (HTTP {response.status_code}){f': {detail}' if detail else ''}."
 
 
 def _provider() -> PlaceProvider:

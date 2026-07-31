@@ -22,6 +22,23 @@ class TeslaAdapter(ABC):
     async def get_state(self) -> dict[str, Any]:
         """Return a normalized snapshot: temp, battery, locked, climate_on, etc."""
 
+    @abstractmethod
+    async def wake(self) -> dict[str, Any]:
+        """Bring the car online, then return fresh state.
+
+        Deliberately part of the interface rather than a private detail of the
+        fleet implementation. Waking was reachable only as a side effect of
+        sending a command, which meant the assistant could be asked "is the car
+        asleep?", answer yes, be told "then wake it", and have nothing to call —
+        so it said it was waking the car and did nothing. A capability the
+        assistant is expected to have needs to exist as one.
+
+        Returns the state with `woke` alongside it: true if the car answered,
+        false if it never came online. A car that will not wake is an answer,
+        not an error — the owner wants to hear "it isn't responding", not a
+        stack trace.
+        """
+
     # --- climate ---
     @abstractmethod
     async def set_temperature(self, celsius: float) -> dict[str, Any]: ...

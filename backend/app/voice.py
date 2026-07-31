@@ -28,6 +28,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 
 from app.config import get_settings
+from app.llm.prompt import DOMAIN_VOCABULARY
 
 # 30 s of 16 kHz 16-bit mono PCM is ~960 KB; the cap leaves room for the WAV
 # header and a slightly generous client without accepting arbitrary uploads.
@@ -53,12 +54,12 @@ _LANGUAGE_HINTS = {
 # "Superchargera" as "Super-Hargera". Domain words are exactly what a general
 # transcriber guesses wrong, because in ordinary Polish they are rare and their
 # neighbours are common.
+# The list itself lives in app/llm/prompt.py, because the live audio model now
+# needs the same one — see DOMAIN_VOCABULARY there.
 _DOMAIN_HINT = (
     "The speaker is giving a command to an assistant that controls a Tesla car, "
-    "so expect vocabulary from that domain: klimatyzacja, temperatura, stopni, "
-    "ładowanie, ładowarka, Supercharger, limit ładowania, procent, bateria, "
-    "zasięg, nawigacja, bagażnik, szyby, klakson, światła, podgrzewanie foteli, "
-    "Sentry, HomeLink, minut, godzin. Prefer these over similar-sounding words."
+    f"so expect vocabulary from that domain: {DOMAIN_VOCABULARY}. "
+    "Prefer these over similar-sounding words."
 )
 
 # Something for the model to *say* when it heard nothing, rather than asking

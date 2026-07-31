@@ -28,6 +28,19 @@ TOOLS: list[dict[str, Any]] = [
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
+        "name": "wake_vehicle",
+        "description": (
+            "Wake the car so it can answer. Use it when the owner asks you to "
+            "wake the car, and before anything that needs live data if a read "
+            "came back asleep and did not wake it by itself. Takes up to about "
+            "40 seconds and costs a little battery, so don't call it to answer "
+            "a question the cached snapshot already answers. Returns the fresh "
+            "state, plus `woke`: false means the car never came online — say "
+            "so rather than pretending it did."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
         "name": "set_climate_temp",
         "description": "Set the cabin target temperature in Celsius.",
         "input_schema": {
@@ -613,6 +626,30 @@ async def dispatch(adapter: TeslaAdapter, name: str, args: dict[str, Any]) -> di
     return await dispatch_unguarded(adapter, name, args)
 
 
+async def _read_state(adapter: TeslaAdapter) -> dict[str, Any]:
+    """Read the car, waking it first if it is asleep.
+
+    This is the assistant's read, and it is not the same thing as the strip's.
+    `/vehicle/state` still goes straight to the adapter and still never wakes
+    anything — it is polled every few seconds to draw a status bar, and a bar
+    that woke the car to draw itself would flatten the battery in a day.
+
+    Here the caller is a person who asked a question. Answering "it's asleep,
+    so I don't know" and stopping is the behaviour the owner objected to, and
+    rightly: they asked what the battery was at, not what the app's caching
+    policy is. So the car is woken and the original question is answered from
+    live data, in the same turn, without anyone having to ask twice.
+
+    A wake that fails still returns a snapshot, marked `woke: false`. The model
+    then has both halves — the last thing we knew, and the fact that the car is
+    not answering — and can say both.
+    """
+    state = await adapter.get_state()
+    if state.get("awake") is False:
+        return await adapter.wake()
+    return state
+
+
 async def _send_route(adapter: TeslaAdapter, stops: list[dict[str, Any]]) -> dict[str, Any]:
     """Resolve every stop to coordinates, then hand the lot to the car.
 
@@ -638,7 +675,8 @@ async def dispatch_unguarded(
     smuggle in a sensitive command either."""
     _validate(name, args)
     handlers = {
-        "get_vehicle_state": lambda: adapter.get_state(),
+        "get_vehicle_state": lambda: _read_state(adapter),
+        "wake_vehicle": lambda: adapter.wake(),
         "set_climate_temp": lambda: adapter.set_temperature(args["celsius"]),
         "start_climate": lambda: adapter.start_climate(),
         "stop_climate": lambda: adapter.stop_climate(),

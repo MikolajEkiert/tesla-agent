@@ -493,6 +493,25 @@ class FleetImpl:
         self._remember(self._normalize(data))
         return {**self._last_state, "stale_seconds": 0}
 
+    async def wake(self) -> dict[str, Any]:
+        """Ask the car to come online, then read it properly.
+
+        The wake itself has existed all along — it is what every command does
+        before it sends anything. What did not exist was any way for the
+        assistant to ask for it on its own, which is why "wake the car" used to
+        produce a sentence and no HTTP request.
+
+        A car that will not wake returns rather than raises. The 12V battery
+        may be flat, it may be in a garage with no signal, it may be in deep
+        sleep after days parked — none of those are faults of this app, and all
+        of them are things the owner should simply be told.
+        """
+        try:
+            await self._wake_and_wait()
+        except Exception as e:
+            return {**(await self.get_state()), "woke": False, "wake_error": str(e)}
+        return {**(await self.get_state()), "woke": True}
+
     # --- commands (all go through the signing proxy; wake-and-retry above) ---
     async def set_temperature(self, celsius: float) -> dict[str, Any]:
         return await self._command(

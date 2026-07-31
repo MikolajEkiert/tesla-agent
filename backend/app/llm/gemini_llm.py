@@ -12,6 +12,7 @@ from google import genai
 from google.genai import types
 
 from app.config import get_settings
+from app.llm.gemini_tools import function_declarations
 from app.llm.prompt import (
     MAX_TOOL_ROUNDS,
     build_system_prompt,
@@ -19,40 +20,7 @@ from app.llm.prompt import (
     sanitize_history,
 )
 from app.tesla.adapter import TeslaAdapter
-from app.tools import TOOLS, dispatch
-
-
-def _to_gemini_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Convert our canonical JSON-schema dicts to Gemini's OpenAPI subset:
-    drop `additionalProperties` (unsupported) and uppercase `type` values."""
-    out: dict[str, Any] = {}
-    for key, value in schema.items():
-        if key == "additionalProperties":
-            continue
-        if key == "type" and isinstance(value, str):
-            out[key] = value.upper()
-        elif key == "properties" and isinstance(value, dict):
-            out[key] = {k: _to_gemini_schema(v) for k, v in value.items()}
-        elif key == "items" and isinstance(value, dict):
-            out[key] = _to_gemini_schema(value)
-        else:
-            out[key] = value
-    return out
-
-
-def _function_declarations() -> list[types.FunctionDeclaration]:
-    decls = []
-    for tool in TOOLS:
-        schema = tool["input_schema"]
-        params = _to_gemini_schema(schema) if schema.get("properties") else None
-        decls.append(
-            types.FunctionDeclaration(
-                name=tool["name"],
-                description=tool["description"],
-                parameters=params,
-            )
-        )
-    return decls
+from app.tools import dispatch
 
 
 class GeminiOrchestrator:
@@ -60,7 +28,7 @@ class GeminiOrchestrator:
         self.adapter = adapter
         self.settings = get_settings()
         self.client = genai.Client(api_key=self.settings.gemini_api_key)
-        self._tools = [types.Tool(function_declarations=_function_declarations())]
+        self._tools = [types.Tool(function_declarations=function_declarations())]
 
     def _config(self, language: str | None) -> types.GenerateContentConfig:
         # Built fresh per request (cheap) since the system instruction
