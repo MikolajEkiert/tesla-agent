@@ -9,8 +9,14 @@
     },
     {
       "name": "api",
-      "runtimeExecutable": "backend/.venv/bin/uvicorn",
-      "runtimeArgs": ["app.main:app", "--reload", "--port", "8123", "--app-dir", "backend"],
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "api"],
+      "port": 8123
+    },
+    {
+      "name": "api-fleet",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "api:fleet"],
       "port": 8123
     }
   ]

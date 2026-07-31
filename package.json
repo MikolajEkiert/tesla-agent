@@ -2,6 +2,8 @@
   "name": "tesla-agent",
   "private": true,
   "scripts": {
-    "web": "cd mobile && EXPO_PUBLIC_API_URL=http://localhost:8123 npx expo start --web --port 8090"
+    "web": "cd mobile && EXPO_PUBLIC_API_URL=http://localhost:8123 npx expo start --web --port 8090",
+    "api": "TESLA_ADAPTER=mock backend/.venv/bin/uvicorn app.main:app --reload --port 8123 --app-dir backend",
+    "api:fleet": "backend/.venv/bin/uvicorn app.main:app --reload --port 8123 --app-dir backend"
   }
 }
