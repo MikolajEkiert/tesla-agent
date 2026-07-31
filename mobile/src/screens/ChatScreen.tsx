@@ -1516,6 +1516,22 @@ export function ChatScreen({
           >
             <FlatList
               ref={listRef}
+              // The list is the conversation, so it must not outlive one.
+              //
+              // Without this, "New chat" left the old rows on screen underneath
+              // the greeting: state was already correct — the empty placeholder
+              // only renders when there are no items at all — but the previous
+              // conversation's cells stayed in the tree beside it. Measured on
+              // the reproduction: thirteen orphaned cells and the placeholder,
+              // siblings in one container, so the reader saw the end of the
+              // last conversation above "W czym mogę pomóc?".
+              //
+              // Keying by the chat id makes that unrepresentable rather than
+              // unlikely: a different conversation is a different list, and
+              // React mounts it clean. It also throws away the scroll position
+              // on the way, which is what opening another conversation wants
+              // anyway — see how openChat resets atBottomRef.
+              key={activeChatId}
               data={items}
               keyExtractor={(item) => item.id}
               contentContainerStyle={[
