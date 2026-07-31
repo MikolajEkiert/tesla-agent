@@ -21,32 +21,66 @@ import { encodeWav, SAMPLE_RATE } from "./recorder";
  * two later, when the session is finally up — that gesture is long gone.
  */
 
-/** Short enough to be a blip rather than a beep, long enough to be heard over
- *  road noise. */
-const CUE_MS = 110;
+/**
+ * Two notes, not one.
+ *
+ * A single sine at a fixed level is a smoke alarm's vocabulary — it says
+ * "attention" when the thing it means is "go ahead". Two notes rising a fourth
+ * (E5 to A5) read as an opening rather than a warning, which is what this is.
+ *
+ * Each is struck rather than switched on: a fast attack and an exponential
+ * decay, plus a quiet second harmonic, which is roughly what a small bell does
+ * and what a phone speaker reproduces well. A flat-topped tone at the same
+ * loudness sounds twice as intrusive.
+ */
+const NOTES = [
+  { hz: 659.25, startMs: 0, lengthMs: 150 },
+  { hz: 880.0, startMs: 85, lengthMs: 220 },
+] as const;
 
-/** Above the voice's fundamental so it does not read as someone speaking, below
- *  the range that makes a phone speaker sound shrill. */
-const CUE_HZ = 880;
+const CUE_MS = 320;
 
 /** Quiet on purpose. It confirms something; it is not an alarm. */
-const CUE_VOLUME = 0.35;
+const CUE_VOLUME = 0.3;
 
-/** Milliseconds of fade at each end. Without them the tone starts and stops on
- *  a discontinuity, which a speaker reproduces as a click — and a click is
- *  exactly the kind of broadband transient the speech detector is built to
- *  distrust. */
-const FADE_MS = 12;
+/** How fast each note dies away. Higher is shorter; this lands between a
+ *  marimba and a small bell. */
+const DECAY = 11;
+
+/** The attack, in milliseconds. Not zero: a note that begins on a
+ *  discontinuity clicks, and a click is exactly the kind of broadband
+ *  transient the speech detector is built to distrust. */
+const ATTACK_MS = 4;
+
+/** Second harmonic, quiet enough to add body without adding pitch. */
+const HARMONIC = 0.22;
 
 let element: HTMLAudioElement | null = null;
 
 function buildUrl(): string {
   const samples = new Float32Array(Math.round((SAMPLE_RATE * CUE_MS) / 1000));
-  const fade = Math.round((SAMPLE_RATE * FADE_MS) / 1000);
-  for (let i = 0; i < samples.length; i++) {
-    const envelope = Math.min(1, i / fade, (samples.length - i) / fade);
-    samples[i] = Math.sin((2 * Math.PI * CUE_HZ * i) / SAMPLE_RATE) * envelope;
+  const attack = Math.max(1, Math.round((SAMPLE_RATE * ATTACK_MS) / 1000));
+
+  for (const note of NOTES) {
+    const from = Math.round((SAMPLE_RATE * note.startMs) / 1000);
+    const length = Math.round((SAMPLE_RATE * note.lengthMs) / 1000);
+    for (let i = 0; i < length && from + i < samples.length; i++) {
+      const seconds = i / SAMPLE_RATE;
+      // Struck, then left to ring: full amplitude within a few milliseconds,
+      // then an exponential tail.
+      const envelope = Math.min(1, i / attack) * Math.exp(-DECAY * seconds);
+      const phase = (2 * Math.PI * note.hz * i) / SAMPLE_RATE;
+      samples[from + i] +=
+        (Math.sin(phase) + HARMONIC * Math.sin(2 * phase)) * envelope;
+    }
   }
+
+  // The notes overlap, so normalise rather than trusting the sum to behave —
+  // a WAV that clips is a click at the loudest moment.
+  let peak = 0;
+  for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
+  if (peak > 0) for (let i = 0; i < samples.length; i++) samples[i] /= peak;
+
   // The recorder's own encoder: one WAV writer in the app, so a tone and a
   // recording cannot disagree about what a WAV is.
   return URL.createObjectURL(encodeWav(samples, SAMPLE_RATE));

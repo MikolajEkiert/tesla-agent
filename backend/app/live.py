@@ -107,12 +107,60 @@ SPOKEN_INSTRUCTION = (
     "Some commands you are not allowed to execute: the tool will answer that a "
     "confirmation is required. When it does, say in one short sentence what is "
     "waiting and that it has to be confirmed in the app, then stop. Do not call "
-    "that tool again and do not reach for another tool to get the same effect."
+    "that tool again and do not reach for another tool to get the same effect. "
+    # The conversation is held with the microphone open, so it has to be able
+    # to end. Left to the driver alone it ends by being abandoned, and an
+    # abandoned conversation is one still listening.
+    "When the exchange is over — they say they need nothing more, or say "
+    "goodbye — say one short line to close it and call end_conversation in the "
+    "same turn. Do not ask a further question first: 'anything else?' answered "
+    "with 'no' is the end, not an invitation to ask again."
 )
 
 
 class LiveUnavailable(RuntimeError):
     pass
+
+
+# --- ending the conversation ------------------------------------------------
+#
+# A capability of the conversation rather than of the car, which is why it is
+# declared here and not in app/tools.py: the typed assistant has no
+# conversation to end, and /live/tool must never be asked to run it — the phone
+# answers it itself, without a round trip.
+#
+# It exists because the alternative is a keyword list, and a keyword list is
+# always wrong somewhere. "Nie" ends the exchange after "czy mogę zrobić coś
+# jeszcze?" and means the opposite after "czy ustawić nawigację?". Only
+# something following the conversation can tell those apart, and the model is
+# already following it.
+END_CONVERSATION = {
+    "name": "end_conversation",
+    "description": (
+        "Close the voice conversation and stop listening. Call this once the "
+        "exchange is finished — the driver has said they need nothing more, "
+        "or has said goodbye — and call it together with your closing line, "
+        "not instead of it: say the short farewell in the same turn. Do not "
+        "call it while anything is still waiting, including a command that "
+        "needs confirming in the app, and never as a way out of a question "
+        "you would rather not answer. If in doubt, stay listening; the driver "
+        "can always close it themselves."
+    ),
+}
+
+
+def _live_declarations() -> list[types.FunctionDeclaration]:
+    """The car's tools, plus the one that belongs to the conversation."""
+    return [
+        *function_declarations(),
+        types.FunctionDeclaration(
+            name=END_CONVERSATION["name"], description=END_CONVERSATION["description"]
+        ),
+    ]
+
+
+def _live_declarations_json() -> list[dict[str, Any]]:
+    return [*declarations_as_json(), dict(END_CONVERSATION)]
 
 
 def _model() -> str:
@@ -210,7 +258,7 @@ async def _mint_on(
         system_instruction=system_instruction(language),
         # The same tools the typed assistant has. Bound to the token rather
         # than left to the client, so a browser cannot widen its own reach.
-        tools=[types.Tool(function_declarations=function_declarations())],
+        tools=[types.Tool(function_declarations=_live_declarations())],
     )
 
     # Errors travel up to mint_token, which decides whether another model is
@@ -240,5 +288,5 @@ async def _mint_on(
         # constraints differently, the failure would be a session that silently
         # has no tools and starts inventing again. That is the one failure this
         # feature exists to make impossible, so it is worth sending twice.
-        "tools": [{"functionDeclarations": declarations_as_json()}],
+        "tools": [{"functionDeclarations": _live_declarations_json()}],
     }

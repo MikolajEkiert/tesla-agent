@@ -72,7 +72,28 @@ const OUTPUT_RATE = 24000;
  * never by loudness alone: a car is a noisy room and road noise must not count
  * as company.
  */
-const IDLE_TIMEOUT_MS = 90_000;
+/**
+ * Silence that ends the conversation.
+ *
+ * Five seconds, at the owner's request, and it is short enough that the
+ * measurement has to be honest — see onFrame, where anything audible resets
+ * it. The old ninety seconds could afford to watch only the model's side of
+ * the exchange; this cannot.
+ */
+const IDLE_TIMEOUT_MS = 5_000;
+
+/** Peak level that counts as "something is happening in here". The same figure
+ *  the record-and-upload path uses for the same judgement. */
+const AUDIBLE_LEVEL = 0.02;
+
+/** Declared for this session only, in backend/app/live.py, and answered on this
+ *  side — see runTools. Never sent to /live/tool: it does nothing to the car. */
+const END_CONVERSATION_TOOL = "end_conversation";
+
+/** How often the idle clock is examined. Was five seconds, which was invisible
+ *  against a ninety-second timeout and would have made a five-second one mean
+ *  anywhere between five and ten. */
+const IDLE_CHECK_MS = 500;
 
 /** How much audio goes in one message. Small enough that the recogniser is
  *  never waiting on us, large enough that the main thread isn't encoding and
@@ -123,6 +144,9 @@ export interface LiveHandlers {
   onAssistantTranscript: (text: string) => void;
   /** A tool ran (or refused to). Drives the instrument log and the cards. */
   onTool: (event: LiveToolEvent) => void;
+  /** The exchange reached its end and the assistant has finished saying so.
+   *  Distinct from onIdle, which means nobody said anything at all. */
+  onConcluded: () => void;
   /** Listening / thinking / speaking, for the bar. */
   onPhase: (phase: LivePhase) => void;
   /** 0..1, for the listening indicator. */
@@ -210,6 +234,9 @@ export class LiveSession {
   private heard = "";
   private said = "";
   private speaking = false;
+  /** The model asked to close the conversation; do it once it has finished
+   *  saying goodbye. */
+  private endAfterReply = false;
   /** The rest of this reply was cut off by a tap and must not be heard or
    *  logged. Cleared when the turn ends. */
   private suppressed = false;
@@ -280,7 +307,7 @@ export class LiveSession {
       if (!this.closed && Date.now() - this.idleAt >= IDLE_TIMEOUT_MS) {
         this.handlers.onIdle();
       }
-    }, 5000);
+    }, IDLE_CHECK_MS);
     this.handlers.onPhase("listening");
   }
 
@@ -465,9 +492,28 @@ export class LiveSession {
       // phase when the queue actually drains.
       if (!this.speaking || this.playingSources === 0) {
         this.speaking = false;
-        this.handlers.onPhase("listening");
+        this.settleTurn();
       }
     }
+  }
+
+  /**
+   * The reply is over and the microphone is the driver's again — unless the
+   * model closed the conversation, in which case this is where the closing
+   * line has finished being heard and the session can go.
+   *
+   * Both routes out of a turn come through here, because there are two and
+   * which one runs depends on whether audio was still queued when the turn
+   * completed. Ending in only one of them would work most of the time, which
+   * is the worst way for this to be wrong.
+   */
+  private settleTurn(): void {
+    if (this.endAfterReply) {
+      this.endAfterReply = false;
+      this.handlers.onConcluded();
+      return;
+    }
+    this.handlers.onPhase("listening");
   }
 
   /**
@@ -493,6 +539,22 @@ export class LiveSession {
     const responses: Record<string, unknown>[] = [];
     for (const call of calls) {
       const args = call.args ?? {};
+
+      // The conversation's own tool, answered here rather than at /live/tool.
+      // Nothing about the car changes, so there is nothing for the backend to
+      // do — and it must not reach the instrument log either, which is a
+      // record of what happened to the vehicle.
+      //
+      // The session is not closed on the spot: the model calls this in the
+      // same turn as its closing line, and cutting the socket now would take
+      // the goodbye with it. The flag is spent when the reply has finished
+      // playing.
+      if (call.name === END_CONVERSATION_TOOL) {
+        this.endAfterReply = true;
+        responses.push({ id: call.id, name: call.name, response: { result: "ok" } });
+        continue;
+      }
+
       try {
         const outcome = await runLiveTool(call.name, args);
         this.handlers.onTool({
@@ -665,6 +727,16 @@ export class LiveSession {
     for (let i = 0; i < frame.length; i++) peak = Math.max(peak, Math.abs(frame[i]));
     this.framePeak = Math.max(this.framePeak, peak);
     const now = Date.now();
+
+    // Anything audible counts as the conversation still being had.
+    //
+    // The idle clock used to be reset only by the model — a transcript, a
+    // chunk of reply, a tool call — which was fine at ninety seconds and is
+    // not at five: someone mid-sentence produces no model events at all until
+    // the phrase lands, and the session would close over the top of them. What
+    // the timeout is actually about is silence in the car, so silence in the
+    // car is what it measures.
+    if (peak >= AUDIBLE_LEVEL) this.touch();
     if (now - this.lastLevelAt >= LEVEL_INTERVAL_MS) {
       this.lastLevelAt = now;
       this.handlers.onLevel?.(this.framePeak);
@@ -784,7 +856,7 @@ export class LiveSession {
       this.playingSources -= 1;
       if (this.playingSources === 0 && this.speaking && !this.closed) {
         this.speaking = false;
-        this.handlers.onPhase("listening");
+        this.settleTurn();
       }
     };
   }

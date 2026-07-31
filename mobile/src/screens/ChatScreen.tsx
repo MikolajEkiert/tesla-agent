@@ -96,17 +96,17 @@ const CONVERSATION_SILENCE_MS = 1100;
 const CONVERSATION_QUIET_LEVEL = 0.02;
 
 /** How long to hold the microphone open for a turn where nothing resembling
- *  speech ever arrives, before handing back an empty turn and listening
- *  again. Without it such a turn runs to MAX_SECONDS — half a minute of dead
- *  air in the middle of a conversation. */
-const CONVERSATION_NO_SPEECH_MS = 8000;
+ *  speech ever arrives. Five seconds, matching IDLE_TIMEOUT_MS on the live
+ *  path, so the two ways of having a conversation give up at the same point
+ *  rather than one of them feeling broken. */
+const CONVERSATION_NO_SPEECH_MS = 5000;
 
-/** Empty turns in a row before the conversation closes itself. Without it the
- *  loop listens forever: a phone left in a parked car keeps the microphone
- *  open, the recording indicator lit, and the loop spinning, long after
- *  whoever started it has walked away. Three turns is about half a minute of
- *  nothing — enough to survive a red light or a thought mid-sentence. */
-const CONVERSATION_MAX_EMPTY_TURNS = 3;
+/** Empty turns in a row before the conversation closes itself.
+ *
+ * One, now that a turn gives up after five seconds rather than eight: three
+ * turns of silence would be fifteen seconds of a lit microphone in a car
+ * nobody is talking in, which is the thing the timeout exists to prevent. */
+const CONVERSATION_MAX_EMPTY_TURNS = 1;
 
 /**
  * Peak level that counts as a deliberate interruption while the assistant is
@@ -1159,6 +1159,12 @@ export function ChatScreen({
           refreshVehicle();
           refreshScheduled();
         }
+      },
+      onConcluded: () => {
+        // The exchange finished on its own terms — the assistant said its
+        // closing line and asked to be let go. Same teardown as the ✕, so the
+        // microphone is released the moment the goodbye stops playing.
+        stopConversation();
       },
       onIdle: () => {
         // Nobody has said anything for a while. A phone left in a parked car
