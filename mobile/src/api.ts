@@ -217,21 +217,67 @@ export async function fetchSpeech(
   return res.blob();
 }
 
+export interface LiveToken {
+  token: string;
+  model: string;
+  expires_in_seconds: number;
+  /** Gemini function declarations, minted with the token — see fetchLiveToken. */
+  tools: Record<string, unknown>[];
+}
+
 /**
  * A one-use credential for the phone's own audio session.
  *
- * Short-lived and bound server-side to one model and configuration, so what
- * arrives here cannot be turned into anything else — and the session it opens
- * has no tools, so it can talk but not act. See backend/app/live.py.
+ * Short-lived and bound server-side to one model, one configuration and one
+ * tool list, so what arrives here cannot be turned into anything else. The
+ * tools come back with it only so the client can repeat them in its own setup
+ * message; they are already bound to the token. See backend/app/live.py.
  */
 export async function fetchLiveToken(
-  voice: string
-): Promise<{ token: string; model: string; expires_in_seconds: number }> {
+  voice: string,
+  language?: string,
+  /** A model that minted a token and then refused the session — ask for a
+   *  different one. Only this side ever sees that happen. */
+  avoid?: string
+): Promise<LiveToken> {
   const res = await fetch(`${DEFAULT_BASE_URL}/voice/live-token`, {
     ...CREDENTIALS,
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ voice }),
+    body: JSON.stringify({ voice, language, avoid }),
+  });
+  await guard(res);
+  return res.json();
+}
+
+/** What running one of the live session's tool calls produced. */
+export interface LiveToolResult {
+  ok: boolean;
+  /** What to hand back to the model. Absent when the call failed. */
+  result?: Record<string, unknown>;
+  /** Why it failed, in the model's own terms, so it can say so or try again. */
+  error?: string;
+  /** The command was parked instead of executed — raise a card for it. The
+   *  token stays out of the model's context on purpose (see backend). */
+  confirm?: { token: string; tool: string; args: Record<string, unknown> } | null;
+}
+
+/**
+ * Execute a tool the live audio session asked for.
+ *
+ * The live conversation runs between the phone and Google; this call is the
+ * only point at which it touches the car, and it goes through the same
+ * dispatch — and the same confirmation gate — as anything typed into the chat.
+ */
+export async function runLiveTool(
+  name: string,
+  args: Record<string, unknown>
+): Promise<LiveToolResult> {
+  const res = await fetch(`${DEFAULT_BASE_URL}/live/tool`, {
+    ...CREDENTIALS,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name, args }),
   });
   await guard(res);
   return res.json();

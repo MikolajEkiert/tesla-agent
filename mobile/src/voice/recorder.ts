@@ -150,7 +150,9 @@ function resample(input: Float32Array, from: number, to: number): Float32Array {
   return out;
 }
 
-function encodeWav(samples: Float32Array, sampleRate: number): Blob {
+/** Shared with the live session, which buffers a turn's audio for the same
+ *  reason this exists: one format, known to be accepted, on every browser. */
+export function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
   const view = new DataView(buffer);
   const ascii = (offset: number, text: string) => {
@@ -266,6 +268,17 @@ export class VoiceRecorder {
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
+
+    // cancel() may have run while that was pending — a conversation ended, the
+    // app locked, the screen unmounted. It had nothing to release at the time,
+    // because the stream did not exist yet; it does now, and nobody is holding
+    // it any more. Left alone it stays open forever and the browser goes on
+    // showing the tab as recording.
+    if (this.stopping) {
+      this.stream.getTracks().forEach((track) => track.stop());
+      this.stream = null;
+      throw new VoiceUnavailableError("cancelled before it started");
+    }
 
     const Ctor = window.AudioContext || (window as any).webkitAudioContext;
     try {

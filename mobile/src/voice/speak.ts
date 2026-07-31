@@ -24,6 +24,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 import { fetchSpeech } from "../api";
+import { toPlainText } from "../markdown";
 import type { Language } from "../i18n";
 
 export type SpeechMode = "off" | "voice" | "always";
@@ -275,8 +276,41 @@ function releaseUrl(): void {
   playerUrl = null;
 }
 
+/**
+ * The short lines that get said again and again — above all the voice sample
+ * in Settings, which is spoken on every single tap because a name like
+ * "Vindemiatrix" means nothing until you hear it.
+ *
+ * The backend caches these on disk too, so the synthesiser is paid once ever
+ * rather than once per tap. This one is in front of that: flicking back and
+ * forth between two voices should not be a network round trip at all, and in a
+ * car the network is the slow part.
+ *
+ * Bounded and small — twelve is the whole sample matrix, six voices in two
+ * languages. Replies are not cached: they are long, said once, and holding
+ * their audio would be a memory leak dressed as an optimisation.
+ */
+const CLIP_CACHE_MAX_CHARS = 200;
+const CLIP_CACHE_MAX_ENTRIES = 12;
+const clipCache = new Map<string, Blob>();
+
+function rememberClip(key: string, blob: Blob): void {
+  clipCache.delete(key);
+  clipCache.set(key, blob);
+  // Map keeps insertion order, so the first key is the least recently stored.
+  while (clipCache.size > CLIP_CACHE_MAX_ENTRIES) {
+    const oldest = clipCache.keys().next().value;
+    if (oldest === undefined) break;
+    clipCache.delete(oldest);
+  }
+}
+
 export function speak(text: string, language: Language, handlers?: SpeechHandlers): void {
-  const spoken = text.trim().slice(0, MAX_SPOKEN_CHARS);
+  // Marks off first. A reply listing restaurants is full of "**", and a
+  // synthesiser handed those either reads them aloud or stumbles over them —
+  // the same missing step that put asterisks on the screen was also putting
+  // them in the car's speakers, where they are harder to notice and worse.
+  const spoken = toPlainText(text).slice(0, MAX_SPOKEN_CHARS);
   if (!spoken) return;
 
   // Whatever is speaking now belongs to an older reply. Two answers talking
@@ -292,12 +326,21 @@ export function speak(text: string, language: Language, handlers?: SpeechHandler
     return;
   }
 
+  const cacheable = spoken.length <= CLIP_CACHE_MAX_CHARS;
+  const key = `${language}|${voiceChoice}|${spoken}`;
+  const cached = cacheable ? clipCache.get(key) : undefined;
+  if (cached) {
+    playFile(cached, spoken, language, mine, handlers);
+    return;
+  }
+
   const controller = new AbortController();
   pending = controller;
   fetchSpeech(spoken, language, voiceChoice, controller.signal)
     .then((blob) => {
       if (mine !== generation) return;
       pending = null;
+      if (cacheable) rememberClip(key, blob);
       playFile(blob, spoken, language, mine, handlers);
     })
     .catch((e) => {

@@ -2,8 +2,9 @@ import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { startTeslaLogin } from "../api";
+import { AmpMark } from "../components/AmpMark";
 import { useLanguage } from "../LanguageContext";
-import { color, font, radius, space } from "../theme";
+import { color, font, radius, space, type } from "../theme";
 
 /**
  * Gates the app until the Tesla account is linked (only shown when the
@@ -15,7 +16,9 @@ export function ConnectScreen({ errorMessage }: { errorMessage?: string | null }
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <View style={styles.content}>
-        <View style={styles.bolt} />
+        <View style={styles.mark}>
+          <AmpMark size={34} />
+        </View>
         <Text style={styles.brand}>AMP</Text>
         <Text style={styles.headline}>{t("connectHeadline")}</Text>
         <Text style={styles.body}>{t("connectBody")}</Text>
@@ -44,34 +47,37 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+    width: "100%",
+    maxWidth: 420,
+    alignSelf: "center",
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: space.xxl,
+    paddingHorizontal: space.xl,
   },
-  bolt: {
-    width: 40,
-    height: 40,
+  mark: {
+    width: 64,
+    height: 64,
+    borderRadius: radius.lg,
+    backgroundColor: color.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: space.lg,
-    backgroundColor: color.brand,
-    borderRadius: radius.sm,
-    transform: [{ rotate: "12deg" }],
   },
   brand: {
     fontFamily: font.displayBold,
-    fontSize: 14,
+    fontSize: 13,
     letterSpacing: 4,
-    color: color.textSecondary,
+    color: color.textTertiary,
     marginBottom: space.xl,
   },
   headline: {
-    fontFamily: font.display,
-    fontSize: 26,
+    ...type.hero,
     color: color.textPrimary,
     textAlign: "center",
     marginBottom: space.md,
   },
   body: {
-    fontFamily: font.body,
+    ...type.body,
     fontSize: 15,
     lineHeight: 22,
     color: color.textSecondary,
@@ -81,16 +87,15 @@ const styles = StyleSheet.create({
   errorBox: {
     width: "100%",
     paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    borderRadius: 8,
-    backgroundColor: "rgba(226,86,79,0.12)",
+    paddingVertical: space.md,
+    borderRadius: radius.md,
+    backgroundColor: color.alertSoft,
     borderWidth: 1,
     borderColor: color.alert,
     marginBottom: space.lg,
   },
   errorText: {
-    fontFamily: font.mono,
-    fontSize: 12,
+    ...type.caption,
     color: color.alert,
   },
   button: {

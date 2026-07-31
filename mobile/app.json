@@ -20,8 +20,8 @@
     },
     "web": {
       "favicon": "./assets/favicon.png",
-      "themeColor": "#0C0E12",
-      "backgroundColor": "#0C0E12",
+      "themeColor": "#0F1114",
+      "backgroundColor": "#0F1114",
       "display": "standalone",
       "name": "Amp",
       "shortName": "Amp"

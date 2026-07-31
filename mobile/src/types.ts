@@ -10,7 +10,16 @@ export interface ToolCall {
 
 /** One turn in the conversation, or an inline instrument-log entry. */
 export type ChatItem =
-  | { kind: "message"; id: string; role: Role; text: string }
+  | {
+      kind: "message";
+      id: string;
+      role: Role;
+      text: string;
+      /** This was heard, not typed — so the words are a recogniser's best
+       *  guess rather than a quote. Only ever set on live turns; see the note
+       *  in MessageRow. */
+      heard?: boolean;
+    }
   | { kind: "tool"; id: string; call: ToolCall }
   // A physically consequential command the assistant proposed; only a tap on
   // this row executes it (see components/ConfirmCard.tsx).

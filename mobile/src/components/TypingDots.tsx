@@ -1,60 +1,57 @@
 import React, { useEffect, useRef } from "react";
 import { Animated, Easing, StyleSheet, View } from "react-native";
-import { color, space } from "../theme";
+import { color, radius, space } from "../theme";
+import { RAIL_GUTTER } from "./rail";
 
 /**
- * The one deliberate motion moment in the app: three dots in the brand color
- * pulsing in sequence while the assistant is thinking — same visual language
- * as the instrument-log dots, just live instead of settled.
+ * Working on it.
+ *
+ * A single dot at the head of the system rail, breathing — the same position
+ * and size a real tool call will occupy a second later, so the answer grows out
+ * of the waiting rather than replacing it. Three bouncing dots said "typing",
+ * which is not what is happening: the car is being asked something.
  */
 export function TypingDots() {
-  const values = useRef([0, 1, 2].map(() => new Animated.Value(0.3))).current;
+  const pulse = useRef(new Animated.Value(0.3)).current;
 
   useEffect(() => {
-    const loops = values.map((v, i) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(i * 140),
-          Animated.timing(v, {
-            toValue: 1,
-            duration: 420,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.timing(v, {
-            toValue: 0.3,
-            duration: 420,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.delay((2 - i) * 140),
-        ])
-      )
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 700,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0.3,
+          duration: 700,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
     );
-    loops.forEach((l) => l.start());
-    return () => loops.forEach((l) => l.stop());
-  }, [values]);
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
 
   return (
     <View style={styles.row}>
-      {values.map((v, i) => (
-        <Animated.View key={i} style={[styles.dot, { opacity: v }]} />
-      ))}
+      <Animated.View style={[styles.dot, { opacity: pulse }]} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   row: {
-    flexDirection: "row",
-    gap: 5,
-    paddingHorizontal: space.xs,
+    width: RAIL_GUTTER,
+    alignItems: "center",
     paddingVertical: space.sm,
   },
   dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 8,
+    height: 8,
+    borderRadius: radius.pill,
     backgroundColor: color.brand,
   },
 });

@@ -24,6 +24,19 @@
     <meta name="apple-mobile-web-app-title" content="Amp" />
     <meta name="mobile-web-app-capable" content="yes" />
 
+    <!-- No theme-color here on purpose: Expo injects one from app.json's
+         web.themeColor, and a second copy in this template only invites the
+         two to drift apart. app.json is where that colour lives.
+
+         It was not the cause of the white bars anyway — it was already being
+         emitted while they were showing. The cause was the document having no
+         background at all; see the reset below. -->
+
+    <!-- This one Expo does not emit. It stops the browser assuming a light
+         document, which is what colours form controls, scrollbars and the
+         overscroll area. -->
+    <meta name="color-scheme" content="dark" />
+
     <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
     <style id="expo-reset">
       /* These styles make the body full-height */
@@ -40,6 +53,60 @@
         display: flex;
         height: 100%;
         flex: 1;
+      }
+
+      /* …except that on iOS, "100%" is not the screen.
+       *
+       * In a standalone PWA with viewport-fit=cover, the percentage resolves
+       * against a layout viewport that stops short of the bottom of the
+       * display. The app therefore ended a few dozen points above the edge and
+       * the document showed through below it — that strip is what used to be
+       * white, and after it was painted dark it became a gap under the input
+       * bar instead. Same missing height, two different symptoms.
+       *
+       * `dvh` is the unit that means the viewport actually in front of you.
+       * Declared second so a browser that does not know it keeps the rule
+       * above rather than losing its height altogether. */
+      html,
+      body,
+      #root {
+        height: 100dvh;
+      }
+
+      /* The document's own colour, which nothing had set. This is the fix for
+       * the white strips at the notch and along the bottom edge.
+       *
+       * With viewport-fit=cover the viewport reaches under the notch and the
+       * home indicator, and the app's SafeAreaView deliberately pads its
+       * content away from both — so whatever is behind that padding shows
+       * through. That was the page, and the page was white. The insets were
+       * being respected correctly, the theme colour was already declared;
+       * there was simply nothing dark behind the padding.
+       *
+       * `color-scheme` belongs here too: it is what stops the browser painting
+       * a white overscroll area above and below the app when a scroll runs
+       * past its end. */
+      html,
+      body,
+      #root {
+        background-color: #0f1114;
+        color-scheme: dark;
+      }
+
+      /* A pull past the end of a list must not drag the whole app with it —
+       * in a standalone PWA that gesture is how the page itself detaches and
+       * shows a white gap underneath.
+       *
+       * On `html` as well as `body`, and that is the half that matters for the
+       * sideways axis: a horizontal overscroll is how Chrome decides you meant
+       * "go back", which fired alongside the drawer opening. The declaration
+       * propagates from body to the viewport only when html has not made its
+       * own, so stating it once was not enough. The edge strip in
+       * ChatScreen.tsx refuses the same gesture at the DOM, for the browsers
+       * that do not read this. */
+      html,
+      body {
+        overscroll-behavior: none;
       }
     </style>
 

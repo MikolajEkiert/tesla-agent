@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -20,7 +21,7 @@ import {
 } from "../api";
 import { useLanguage } from "../LanguageContext";
 import type { Language, TranslationKey } from "../i18n";
-import { color, font, radius, space } from "../theme";
+import { color, font, radius, space, type } from "../theme";
 import {
   currentVoiceName,
   primeSpeech,
@@ -36,6 +37,10 @@ const LANGUAGES: { code: Language; labelKey: "langEnglish" | "langPolish" }[] = 
   { code: "en", labelKey: "langEnglish" },
   { code: "pl", labelKey: "langPolish" },
 ];
+
+/** A settings column stops being readable long before a window stops growing:
+ *  three segments stretched across a laptop are three targets a metre apart. */
+const SETTINGS_WIDTH = 720;
 
 const SPEECH_MODES: { mode: SpeechMode; labelKey: TranslationKey }[] = [
   { mode: "off", labelKey: "speechOff" },
@@ -145,15 +150,37 @@ export function SettingsScreen({
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+    // Bottom only: this is rendered over the chat, inside a SafeAreaView that
+    // has already stepped around the notch, and claiming the top inset a second
+    // time pushed the header a notch's worth down the screen.
+    <SafeAreaView style={styles.safe} edges={["bottom"]}>
+      {/* The rule spans the window; what sits on it does not. On a laptop a
+          header pinned to both edges puts "Done" a hand's width from the title
+          it belongs to. */}
       <View style={styles.header}>
+        <View style={styles.headerInner}>
         <Text style={styles.title}>{t("settingsTitle")}</Text>
-        <Pressable onPress={onClose} hitSlop={12} style={styles.closeButton}>
+        <Pressable
+          onPress={onClose}
+          hitSlop={12}
+          accessibilityRole="button"
+          style={({ pressed }) => [styles.closeButton, pressed && styles.pressedText]}
+        >
           <Text style={styles.closeText}>{t("settingsClose")}</Text>
         </Pressable>
+        </View>
       </View>
 
-      <View style={styles.content}>
+      {/* Scrolls, which it did not until now: the content was a plain View and
+          everything past the fold — the voice picker, passkeys, the whole
+          lower half — simply could not be reached on a phone. The header stays
+          outside so "Close" is always in the same place. */}
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
         <Text style={styles.label}>{t("settingsLanguageLabel")}</Text>
         <View style={styles.segmented}>
           {LANGUAGES.map(({ code, labelKey }) => {
@@ -162,7 +189,12 @@ export function SettingsScreen({
               <Pressable
                 key={code}
                 onPress={() => setLanguage(code)}
-                style={[styles.segment, active && styles.segmentActive]}
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.segment,
+                  active && styles.segmentActive,
+                  pressed && !active && styles.pressedSurface,
+                ]}
               >
                 <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
                   {t(labelKey)}
@@ -183,7 +215,12 @@ export function SettingsScreen({
                   <Pressable
                     key={mode}
                     onPress={() => onSpeechModeChange(mode)}
-                    style={[styles.segment, active && styles.segmentActive]}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [
+                      styles.segment,
+                      active && styles.segmentActive,
+                      pressed && !active && styles.pressedSurface,
+                    ]}
                   >
                     <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
                       {t(labelKey)}
@@ -205,7 +242,12 @@ export function SettingsScreen({
                       <Pressable
                         key={option}
                         onPress={() => previewVoice(option)}
-                        style={[styles.voiceChip, active && styles.voiceChipActive]}
+                        accessibilityRole="button"
+                        style={({ pressed }) => [
+                          styles.voiceChip,
+                          active && styles.voiceChipActive,
+                          pressed && !active && styles.pressedSurface,
+                        ]}
                       >
                         <Text
                           style={[styles.voiceChipText, active && styles.voiceChipTextActive]}
@@ -260,7 +302,12 @@ export function SettingsScreen({
                   <Pressable
                     key={String(value)}
                     onPress={() => onBargeInChange(value)}
-                    style={[styles.segment, active && styles.segmentActive]}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [
+                      styles.segment,
+                      active && styles.segmentActive,
+                      pressed && !active && styles.pressedSurface,
+                    ]}
                   >
                     <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
                       {t(labelKey)}
@@ -286,7 +333,12 @@ export function SettingsScreen({
                   <Pressable
                     key={String(value)}
                     onPress={() => onVoiceConfirmChange(value)}
-                    style={[styles.segment, active && styles.segmentActive]}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [
+                      styles.segment,
+                      active && styles.segmentActive,
+                      pressed && !active && styles.pressedSurface,
+                    ]}
                   >
                     <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
                       {t(labelKey)}
@@ -310,7 +362,12 @@ export function SettingsScreen({
                   <Pressable
                     key={String(value)}
                     onPress={() => onLiveChange(value)}
-                    style={[styles.segment, active && styles.segmentActive]}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [
+                      styles.segment,
+                      active && styles.segmentActive,
+                      pressed && !active && styles.pressedSurface,
+                    ]}
                   >
                     <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
                       {t(labelKey)}
@@ -330,7 +387,12 @@ export function SettingsScreen({
           <>
             <View style={styles.passkeyRow}>
               <Text style={styles.passkeyLabel}>{t("passkeyAdded")}</Text>
-              <Pressable onPress={() => removePasskey(passkeys[0].credential_id)} hitSlop={8}>
+              <Pressable
+                onPress={() => removePasskey(passkeys[0].credential_id)}
+                hitSlop={8}
+                accessibilityRole="button"
+                style={({ pressed }) => pressed && styles.pressedText}
+              >
                 <Text style={styles.passkeyRemove}>{t("passkeyRemove")}</Text>
               </Pressable>
             </View>
@@ -366,7 +428,7 @@ export function SettingsScreen({
           </>
         )}
         {passkeyError && <Text style={styles.passkeyError}>{passkeyError}</Text>}
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -377,17 +439,21 @@ const styles = StyleSheet.create({
     backgroundColor: color.bg,
   },
   header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
     paddingHorizontal: space.lg,
     paddingVertical: space.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: color.hairline,
   },
+  headerInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    width: "100%",
+    maxWidth: SETTINGS_WIDTH,
+    alignSelf: "center",
+  },
   title: {
-    fontFamily: font.display,
-    fontSize: 18,
+    ...type.title,
     color: color.textPrimary,
   },
   closeButton: {
@@ -399,33 +465,52 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: color.brand,
   },
+  scroll: {
+    flex: 1,
+  },
   content: {
     padding: space.lg,
+    width: "100%",
+    maxWidth: SETTINGS_WIDTH,
+    alignSelf: "center",
+    // Room past the last control, so the bottom row is not pressed against the
+    // home indicator when the list is scrolled to the end.
+    paddingBottom: space.xl * 2,
   },
+  // Section names in the machine's own voice, like the instrument log — they
+  // name a capability of the car, not a page of a form.
   label: {
-    fontFamily: font.bodyMedium,
-    fontSize: 13,
-    color: color.textSecondary,
-    marginBottom: space.sm,
+    ...type.eyebrow,
+    color: color.textTertiary,
+    marginBottom: space.md,
   },
   segmented: {
     flexDirection: "row",
     backgroundColor: color.surface,
-    borderRadius: radius.md,
+    borderRadius: radius.pill,
     padding: 4,
     gap: 4,
   },
   segment: {
     flex: 1,
-    paddingVertical: space.sm,
-    borderRadius: radius.sm,
+    paddingVertical: space.md,
+    borderRadius: radius.pill,
     alignItems: "center",
   },
   segmentActive: {
     backgroundColor: color.brand,
   },
+  // Only the inactive options need this: the selected one is already painted
+  // in the brand colour, and dimming the thing you just chose reads as the
+  // choice failing to take.
+  pressedSurface: {
+    backgroundColor: color.surfaceHover,
+  },
+  pressedText: {
+    opacity: 0.55,
+  },
   segmentText: {
-    fontFamily: font.bodyMedium,
+    ...type.label,
     fontSize: 14,
     color: color.textSecondary,
   },
@@ -444,9 +529,9 @@ const styles = StyleSheet.create({
     gap: space.sm,
   },
   voiceChip: {
-    paddingVertical: space.sm,
-    paddingHorizontal: space.md,
-    borderRadius: radius.sm,
+    paddingVertical: space.md,
+    paddingHorizontal: space.lg,
+    borderRadius: radius.pill,
     backgroundColor: color.surfaceRaised,
   },
   voiceChipActive: {
@@ -477,20 +562,20 @@ const styles = StyleSheet.create({
   },
   enrolInput: {
     backgroundColor: color.surfaceRaised,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: color.hairline,
     paddingHorizontal: space.lg,
-    paddingVertical: space.md,
-    fontFamily: font.body,
+    paddingVertical: space.lg,
+    ...type.body,
     fontSize: 15,
     color: color.textPrimary,
     marginBottom: space.sm,
     ...(Platform.OS === "web" ? { outlineWidth: 0 } : {}),
   },
   passkeyButton: {
-    paddingVertical: space.md,
-    borderRadius: radius.md,
+    paddingVertical: space.lg,
+    borderRadius: radius.lg,
     backgroundColor: color.brand,
     alignItems: "center",
   },
@@ -523,9 +608,9 @@ const styles = StyleSheet.create({
     marginTop: space.sm,
   },
   hint: {
-    fontFamily: font.body,
+    ...type.body,
     fontSize: 13,
-    lineHeight: 18,
+    lineHeight: 19,
     color: color.textTertiary,
     marginTop: space.md,
   },

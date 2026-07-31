@@ -22,6 +22,26 @@ const STRINGS = {
     disconnectCancel: "Cancel",
     disconnectConfirm: "Disconnect",
     errorUnreachable: "Couldn't reach Amp's backend. Is it running?",
+    errorRetry: "Try again",
+    errorDismiss: "Dismiss",
+    sendMessage: "Send",
+    speakMessage: "Read aloud",
+    resendMessage: "Ask again",
+    chatRename: "Rename",
+    confirmEyebrow: "Needs your go-ahead",
+    // The four things people actually ask a car in a car park, phrased exactly
+    // as they are sent — tapping one teaches you what you could have said.
+    chipWarm: "Warm the car to 21°C",
+    chipRange: "How much range do I have?",
+    chipCharger: "Nearest Supercharger",
+    chipLock: "Lock the car",
+    chatDeleteTitle: "Delete this chat?",
+    chatDeleteBody: "The conversation is removed from this device for good.",
+    chatDeleteConfirm: "Delete",
+    copied: "Copied",
+    copyMessage: "Copy message",
+    scrollToLatest: "Jump to latest",
+    charging: "charging",
     asleep: "asleep",
     staleJustNow: "just now",
     locked: "locked",
@@ -34,6 +54,13 @@ const STRINGS = {
     langEnglish: "English",
     langPolish: "Polski",
     menu: "Menu",
+    chatsTitle: "Chats",
+    chatsEmpty: "No saved chats yet",
+    chatNew: "New chat",
+    chatUntitled: "Untitled",
+    heardApprox: "heard",
+    chatToday: "today",
+    chatYesterday: "yesterday",
     queueTitle: "Scheduled",
     queueEmpty: "Nothing scheduled",
     queueClimate: "Climate",
@@ -67,6 +94,10 @@ const STRINGS = {
     confirmNo: "Cancel",
     confirmExecuted: "Confirmed and sent to the car.",
     confirmDismissed: "Cancelled — nothing was sent.",
+    confirmSettledDone: "Sent to the car: {what}",
+    confirmSettledDismissed: "Cancelled: {what}",
+    confirmExpiresIn: "expires in {n} s",
+    confirmExpired: "Expired — ask again to get a fresh confirmation.",
     confirmUnlock: "unlock the car",
     confirmTrunk: "open the trunk",
     confirmHomelink: "trigger HomeLink (garage/gate)",
@@ -120,7 +151,7 @@ const STRINGS = {
     liveOn: "Live audio",
     liveOff: "Recordings",
     liveHint:
-      "\"Live audio\" streams the conversation both ways: your words are recognised as you speak them and the reply starts before it's finished being made. Measured on this phone, it stays audible with the ringer switch on silent. \"Recordings\" is the older path — slower, but it only needs a working request rather than a connection held open, so it's the one to fall back to on a bad signal.",
+      "\"Live audio\" streams the conversation both ways: your words are recognised as you speak them and the reply starts before it's finished being made. It's a separate assistant from the one you type to — same commands, same confirmation cards, but its own memory of what was said, so it won't know about a typed exchange and the other way round. \"Recordings\" is the older path — slower, and it answers in the typed assistant's own thread, but it only needs a working request rather than a connection held open, so it's the one to fall back to on a bad signal.",
   },
   pl: {
     greetingMorning: "Dzień dobry",
@@ -138,6 +169,24 @@ const STRINGS = {
     disconnectCancel: "Anuluj",
     disconnectConfirm: "Odłącz",
     errorUnreachable: "Nie można połączyć się z backendem Amp. Czy jest uruchomiony?",
+    errorRetry: "Ponów",
+    errorDismiss: "Zamknij",
+    sendMessage: "Wyślij",
+    speakMessage: "Przeczytaj na głos",
+    resendMessage: "Zapytaj ponownie",
+    chatRename: "Zmień nazwę",
+    confirmEyebrow: "Czeka na Twoją zgodę",
+    chipWarm: "Nagrzej auto do 21°C",
+    chipRange: "Ile mam zasięgu?",
+    chipCharger: "Najbliższy Supercharger",
+    chipLock: "Zablokuj auto",
+    chatDeleteTitle: "Usunąć ten czat?",
+    chatDeleteBody: "Rozmowa zniknie z tego urządzenia na dobre.",
+    chatDeleteConfirm: "Usuń",
+    copied: "Skopiowano",
+    copyMessage: "Kopiuj wiadomość",
+    scrollToLatest: "Przejdź na dół",
+    charging: "ładowanie",
     asleep: "uśpiony",
     staleJustNow: "przed chwilą",
     locked: "zablokowany",
@@ -150,6 +199,13 @@ const STRINGS = {
     langEnglish: "English",
     langPolish: "Polski",
     menu: "Menu",
+    chatsTitle: "Czaty",
+    chatsEmpty: "Brak zapisanych czatów",
+    chatNew: "Nowy czat",
+    chatUntitled: "Bez tytułu",
+    heardApprox: "usłyszane",
+    chatToday: "dziś",
+    chatYesterday: "wczoraj",
     queueTitle: "Zaplanowane",
     queueEmpty: "Nic nie zaplanowano",
     queueClimate: "Klimatyzacja",
@@ -183,6 +239,10 @@ const STRINGS = {
     confirmNo: "Anuluj",
     confirmExecuted: "Potwierdzone i wysłane do auta.",
     confirmDismissed: "Anulowane — nic nie wysłano.",
+    confirmSettledDone: "Wysłane do auta: {what}",
+    confirmSettledDismissed: "Anulowane: {what}",
+    confirmExpiresIn: "wygasa za {n} s",
+    confirmExpired: "Ważność minęła — poproś ponownie o potwierdzenie.",
     confirmUnlock: "otworzyć auto",
     confirmTrunk: "otworzyć bagażnik",
     confirmHomelink: "uruchomić HomeLink (brama/garaż)",
@@ -236,7 +296,7 @@ const STRINGS = {
     liveOn: "Na żywo",
     liveOff: "Nagrania",
     liveHint:
-      "„Na żywo” przesyła rozmowę strumieniem w obie strony: Twoje słowa są rozpoznawane w trakcie mówienia, a odpowiedź zaczyna płynąć, zanim powstanie w całości. Zmierzone na tym telefonie: słychać ją także przy wyciszonym przełączniku. „Nagrania” to starsza droga — wolniejsza, ale wymaga tylko udanego żądania zamiast trzymanego połączenia, więc to na nią warto wrócić przy słabym zasięgu.",
+      "„Na żywo” przesyła rozmowę strumieniem w obie strony: Twoje słowa są rozpoznawane w trakcie mówienia, a odpowiedź zaczyna płynąć, zanim powstanie w całości. To osobny asystent od tego, do którego piszesz — te same polecenia i te same karty potwierdzeń, ale własna pamięć rozmowy, więc nie wie, co padło w czacie tekstowym, i odwrotnie. „Nagrania” to starsza droga — wolniejsza i odpowiada w wątku czatu tekstowego, ale wymaga tylko udanego żądania zamiast trzymanego połączenia, więc to na nią warto wrócić przy słabym zasięgu.",
   },
 } as const;
 
@@ -283,13 +343,28 @@ export function t(
   );
 }
 
-/** Time-of-day greeting — replaces a greeting that used to always say "evening". */
-export function greeting(language: Language, hour: number): string {
+/**
+ * The two halves of the opening line, kept apart.
+ *
+ * The empty chat sets them as one heading in two tones — the greeting bright,
+ * the question underneath it quiet — so they are returned separately rather
+ * than pre-joined into a sentence a layout would then have to take apart.
+ */
+export function greetingParts(
+  language: Language,
+  hour: number
+): { greeting: string; question: string } {
   const part =
     hour >= 5 && hour < 12
       ? "greetingMorning"
       : hour >= 12 && hour < 18
       ? "greetingAfternoon"
       : "greetingEvening";
-  return `${t(language, part)}. ${t(language, "greetingSuffix")}`;
+  return { greeting: t(language, part), question: t(language, "greetingSuffix") };
+}
+
+/** Time-of-day greeting as one sentence, for anywhere that wants it whole. */
+export function greeting(language: Language, hour: number): string {
+  const parts = greetingParts(language, hour);
+  return `${parts.greeting}. ${parts.question}`;
 }

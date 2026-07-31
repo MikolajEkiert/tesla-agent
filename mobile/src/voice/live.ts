@@ -1,6 +1,6 @@
 /**
- * A live audio session: the phone's microphone and speaker, wired straight to
- * Google, with this app's assistant still doing all the thinking.
+ * The spoken assistant: the phone's microphone and speaker wired straight to
+ * Google, with the same tools the typed assistant has.
  *
  * What this replaces is the round trip — record a file, upload it, wait for a
  * transcript, wait for a reply, wait for that reply to be synthesised, play
@@ -8,22 +8,31 @@
  * it is being said, which is most of the difference between an exchange and a
  * conversation.
  *
- * What it deliberately does not replace is the assistant. The session is
- * opened with no tools, so it can hear and speak and nothing else; the
- * transcript goes to /chat exactly as a typed message would, and the answer
- * comes back through the same confirmation gate. One door, still.
+ * Why it is an assistant now, and not a mouth
+ * -------------------------------------------
+ * It used to be a relay: no tools, an instruction never to answer, the
+ * transcript posted to /chat so the text assistant could think, and the
+ * answer handed back for it to read aloud. That could not work, and the reason
+ * is in the protocol rather than in the prompt. Closing a turn makes a Live
+ * model generate; it generated an answer to the driver every single time, out
+ * of nothing, because it had no tools and no car — "the battery is at 85%",
+ * said with total confidence. The relay tried to swallow that audio with a
+ * flag. Both the unwanted reply and the wanted one arrive on the same socket,
+ * so the flag flipped mid-stream and the tail of a hallucination reached the
+ * speaker in the assistant's own voice. That is the bug this rewrite removes,
+ * and it removes it by giving the model nothing to invent: it holds the real
+ * tools, so an answer about the battery is a tool call away.
  *
- * The awkward part, stated plainly because it shapes the whole file: a live
- * model's instinct is to *answer*. Left to itself it would reply to the driver
- * in its own words, which is precisely the second opinion this architecture
- * refuses to have. So automatic turn detection is switched off and the turn
- * boundaries are driven from here — the session is told when speech starts and
- * stops, and is only ever asked to generate when we hand it the assistant's
- * words to read. It transcribes continuously either way.
+ * The two assistants are deliberately separate. This one owns the spoken
+ * conversation and keeps its context inside the Live session; the typed one
+ * owns /chat and keeps its history in the app. They share the tool list and
+ * they share the gate — a sensitive command comes back parked from
+ * /live/tool exactly as it does from /chat, and only a tap on the card runs
+ * it. A model with tools still cannot open the car.
  */
 import { Platform } from "react-native";
-import { fetchLiveToken } from "../api";
-import { BLOCK_SIZE, classifyBlock, HOP_SIZE, SPEECH_EVIDENCE } from "./vad";
+import { fetchLiveToken, runLiveTool } from "../api";
+import { encodeWav } from "./recorder";
 
 /**
  * Not the endpoint the Live documentation shows, and the difference is the
@@ -42,30 +51,80 @@ import { BLOCK_SIZE, classifyBlock, HOP_SIZE, SPEECH_EVIDENCE } from "./vad";
 const LIVE_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 
-/** What the API expects on the way in, and what the recorder already makes. */
+/** What the API expects on the way in. Not a preference — the stream is
+ *  labelled with this rate, so audio that is actually at some other rate is
+ *  played back to the model at the wrong speed. See resample() below. */
 const INPUT_RATE = 16000;
 /** What comes back. Different rate, hence its own context on playback. */
 const OUTPUT_RATE = 24000;
 
-/** How long a hush ends the driver's turn. Same figure the recorder used —
- *  it was measured against real speech and there is no reason to re-guess it. */
-const SILENCE_MS = 1100;
+/**
+ * Nothing said and nothing happening for this long ends the conversation.
+ *
+ * The old loop counted empty turns because it drove the turn boundaries
+ * itself. Turn detection now belongs to the model, which will happily listen
+ * to an empty car until the token expires — so the guard has to be a clock.
+ * It is reset by speech being recognised or by the assistant doing anything,
+ * never by loudness alone: a car is a noisy room and road noise must not count
+ * as company.
+ */
+const IDLE_TIMEOUT_MS = 90_000;
 
-/** Nothing said for this long ends the turn as empty rather than holding the
- *  microphone open indefinitely. */
-const NO_SPEECH_MS = 8000;
+/** How much audio goes in one message. Small enough that the recogniser is
+ *  never waiting on us, large enough that the main thread isn't encoding and
+ *  sending a hundred times a second. */
+const CHUNK_MS = 100;
+
+/** How often the level meter is allowed to move. It only has to look alive;
+ *  the audio thread hands over frames far faster than a screen refreshes. */
+const LEVEL_INTERVAL_MS = 60;
+
+/** How long to wait for the server to confirm the setup before treating the
+ *  session as a failure worth falling back from. Generous, because this is a
+ *  mobile connection, but finite — the alternative is a conversation that
+ *  never starts and never says why. */
+const SETUP_TIMEOUT_MS = 8000;
+
+/** Longest stretch of one turn kept for re-transcription. The server refuses
+ *  anything over ~1.5 MB and this is well inside it; a spoken command that
+ *  runs past half a minute is not the case worth optimising for. */
+const MAX_TURN_SECONDS = 30;
+
+export interface LiveToolEvent {
+  tool: string;
+  args: Record<string, unknown>;
+  ok: boolean;
+  /** Set when the command was parked rather than run — raise a card. */
+  confirm?: { token: string; tool: string; args: Record<string, unknown> } | null;
+}
+
+export type LivePhase = "listening" | "thinking" | "speaking";
 
 export interface LiveHandlers {
-  /** The driver finished saying something, and this is what it was. */
-  onTranscript: (text: string) => void;
-  /** A turn went by with nothing said in it. */
-  onSilence: () => void;
-  /** The driver started talking over the assistant. */
-  onBargeIn: () => void;
-  /** The assistant's audio finished playing. */
-  onSpokenEnd: () => void;
+  /**
+   * The driver said something, and this is what the session made of it —
+   * plus the audio it made it from.
+   *
+   * Both, because they are not the same quality. The session's transcript
+   * arrives instantly and is a general recogniser working blind; the audio can
+   * be sent to the tuned transcription path, which knows the language and the
+   * car vocabulary, and comes back right. The caller shows the first and
+   * quietly replaces it with the second.
+   *
+   * `audio` is null when nothing was captured — a turn ended by a tool call
+   * with no speech in it, or a session that has only just opened.
+   */
+  onUserTranscript: (text: string, audio: Blob | null) => void;
+  /** The assistant said something, and this is what it was. */
+  onAssistantTranscript: (text: string) => void;
+  /** A tool ran (or refused to). Drives the instrument log and the cards. */
+  onTool: (event: LiveToolEvent) => void;
+  /** Listening / thinking / speaking, for the bar. */
+  onPhase: (phase: LivePhase) => void;
   /** 0..1, for the listening indicator. */
   onLevel?: (level: number) => void;
+  /** Long enough with nobody there. */
+  onIdle: () => void;
   /** The session is gone and is not coming back — fall back to the old path. */
   onClosed: (reason: string) => void;
 }
@@ -97,26 +156,80 @@ function decodeBase64(value: string): Uint8Array {
   return out;
 }
 
+/**
+ * Linear resample, the same one the recorder uses and for the same reason: a
+ * browser is free to ignore the sample rate an AudioContext asks for. Safari
+ * commonly hands back 48 kHz whatever you request, and the fallback path below
+ * — a context constructed with no options at all, after the requested one
+ * threw — always does.
+ *
+ * Nothing warns you when that happens. The frames are still frames; they are
+ * simply three times too many, and labelling them `rate=16000` tells the model
+ * to play a sentence at a third of its speed. What comes back is a transcript
+ * of something nobody said. The recorder has resampled since it was written;
+ * this path streamed raw and got away with it only because Chrome on a desktop
+ * honours the request.
+ */
+function resample(input: Float32Array, from: number, to: number): Float32Array {
+  if (from === to) return input;
+  const ratio = from / to;
+  const out = new Float32Array(Math.floor(input.length / ratio));
+  for (let i = 0; i < out.length; i++) {
+    const pos = i * ratio;
+    const left = Math.floor(pos);
+    const right = Math.min(left + 1, input.length - 1);
+    const frac = pos - left;
+    out[i] = input[left] * (1 - frac) + input[right] * frac;
+  }
+  return out;
+}
+
 export class LiveSession {
   private socket: WebSocket | null = null;
   private stream: MediaStream | null = null;
   private inputContext: AudioContext | null = null;
   private outputContext: AudioContext | null = null;
+  private source: MediaStreamAudioSourceNode | null = null;
   private node: AudioNode | null = null;
   private handlers: LiveHandlers;
 
+  /** Which model this session actually opened on — the preferred one, or the
+   *  fallback after it refused. Read by the caller for the log. */
+  model: string | null = null;
+
+  /** Set by stop(). Everything asynchronous checks it: a socket that closes
+   *  because we closed it is not a session that died, and a frame that arrives
+   *  after teardown must not reopen anything. */
+  private closed = false;
   /** Transcript fragments for the turn in progress; the API sends them as
    *  they are recognised rather than in one piece. */
-  private transcript = "";
-  private listening = false;
+  private heard = "";
+  private said = "";
   private speaking = false;
-  private activityOpen = false;
+  /** The rest of this reply was cut off by a tap and must not be heard or
+   *  logged. Cleared when the turn ends. */
+  private suppressed = false;
+  private idleAt = 0;
+  private idleTimer: ReturnType<typeof setInterval> | null = null;
 
-  private inBandSamples = 0;
-  private consonantSamples = 0;
-  private pendingBlock: Float32Array | null = null;
-  private lastLoudAt = 0;
-  private turnStartedAt = 0;
+  /** Audio waiting to make up a whole chunk, at the context's own rate. */
+  private pending: Float32Array[] = [];
+  private pendingSamples = 0;
+  private framePeak = 0;
+  private lastLevelAt = 0;
+
+  /** The current turn's audio, at 16 kHz, kept so it can be transcribed
+   *  properly after the fact. Cleared when a turn ends and when the assistant
+   *  starts speaking, so a reply leaking through the microphone is never part
+   *  of the next question. */
+  private turnAudio: Float32Array[] = [];
+  private turnSamples = 0;
+
+  /** Whether the microphone keeps streaming while the assistant talks. Off,
+   *  the driver cannot interrupt by voice — which is the point of the setting:
+   *  echo cancellation is not good enough on every phone and car speaker, and
+   *  a reply that keeps interrupting itself is worse than a tap. */
+  allowBargeIn = true;
 
   /** Where the next chunk of the assistant's speech goes. Kept as a moving
    *  cursor so chunks queue seamlessly instead of overlapping. */
@@ -127,10 +240,8 @@ export class LiveSession {
     this.handlers = handlers;
   }
 
-  async start(voice: string): Promise<void> {
+  async start(voice: string, language?: string): Promise<void> {
     if (!liveSupported()) throw new Error("live audio unsupported here");
-
-    const { token, model } = await fetchLiveToken(voice);
 
     // Must happen inside the gesture that started the conversation, like every
     // other audio path on iOS.
@@ -138,11 +249,42 @@ export class LiveSession {
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
 
-    await this.openSocket(token, model);
+    // Twice at most, and the second time is not a retry of the same thing.
+    //
+    // The live model is a preview, and a withdrawn preview does not fail where
+    // you would expect: the server still mints a token for it — minting checks
+    // the config, not the model's availability — and the refusal only appears
+    // here, when the session will not open. So the second attempt tells the
+    // server which model just refused, and it mints on the older one instead.
+    // The microphone is already held and is kept across both.
+    let refused: string | undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { token, model, tools } = await fetchLiveToken(voice, language, refused);
+      this.model = model;
+      try {
+        await this.openSocket(token, model, tools);
+        break;
+      } catch (e) {
+        this.closeSocket();
+        if (attempt === 1 || !model) throw e;
+        refused = model;
+      }
+    }
     await this.startCapture();
+    this.touch();
+    this.idleTimer = setInterval(() => {
+      if (!this.closed && Date.now() - this.idleAt >= IDLE_TIMEOUT_MS) {
+        this.handlers.onIdle();
+      }
+    }, 5000);
+    this.handlers.onPhase("listening");
   }
 
-  private openSocket(token: string, model: string): Promise<void> {
+  private openSocket(
+    token: string,
+    model: string,
+    tools: Record<string, unknown>[]
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       // A query parameter rather than a header, which matters more than it
       // looks: browsers cannot set headers on a WebSocket at all, so a
@@ -152,11 +294,31 @@ export class LiveSession {
       socket.binaryType = "arraybuffer";
       this.socket = socket;
 
-      const failed = (reason: string) => reject(new Error(reason));
-      socket.onerror = () => failed("live socket error");
+      // Resolved by `setupComplete`, not by the socket opening.
+      //
+      // The distinction is what makes the fallback possible at all. A refused
+      // model still opens the socket — the refusal arrives a moment later as a
+      // close — so resolving on `onopen` reported success for a session that
+      // was already dead, and the caller had no failure to retry. Waiting for
+      // the server to confirm the setup means "started" means started.
+      let ready = false;
+      const fail = (reason: string) => {
+        if (!ready) reject(new Error(reason));
+      };
+
+      socket.onerror = () => fail("live socket error");
       socket.onclose = (event) => {
+        if (!ready) {
+          fail(`live session refused (${event.code})`);
+          return;
+        }
+        if (this.closed) return;
         this.handlers.onClosed(`closed ${event.code}`);
       };
+
+      // Neither confirmed nor closed. Without this the conversation sits on a
+      // dead socket rather than dropping to the path that still works.
+      setTimeout(() => fail("live setup timed out"), SETUP_TIMEOUT_MS);
 
       socket.onopen = () => {
         socket.send(
@@ -166,24 +328,61 @@ export class LiveSession {
               generationConfig: { responseModalities: ["AUDIO"] },
               inputAudioTranscription: {},
               outputAudioTranscription: {},
-              realtimeInputConfig: {
-                // The heart of it. With automatic detection on, the model
-                // decides the driver has finished and answers — in its own
-                // words, which is the one thing it must never do. Turn
-                // boundaries are sent from here instead.
-                automaticActivityDetection: { disabled: true },
-              },
+              // The tools are already bound to the token server-side; sending
+              // the identical list changes nothing and costs one message. It is
+              // here because a session that quietly ends up without tools is
+              // exactly the failure this whole path was rebuilt to remove, and
+              // "quietly" is the word that matters — a tool-less model does not
+              // raise an error, it makes something up.
+              tools,
+              // Turn detection is the model's again, deliberately. Driving it
+              // from here is what the old relay did, and it is why the model
+              // was made to generate at moments nobody wanted an answer.
             },
           })
         );
-        resolve();
       };
 
-      socket.onmessage = (event) => this.onMessage(event);
+      socket.onmessage = (event) => {
+        if (!ready && this.isSetupComplete(event)) {
+          ready = true;
+          resolve();
+          return;
+        }
+        void this.onMessage(event);
+      };
     });
   }
 
+  private isSetupComplete(event: MessageEvent): boolean {
+    try {
+      const raw =
+        typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data);
+      return !!JSON.parse(raw).setupComplete;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Drop the socket without ending the session — used between the two
+   *  connection attempts, where the microphone and handlers must survive. */
+  private closeSocket(): void {
+    const socket = this.socket;
+    this.socket = null;
+    if (!socket) return;
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null;
+    try {
+      socket.close();
+    } catch {
+      // already closing
+    }
+  }
+
   private async onMessage(event: MessageEvent): Promise<void> {
+    if (this.closed) return;
     let payload: any;
     try {
       const raw =
@@ -193,36 +392,188 @@ export class LiveSession {
       return;
     }
 
+    if (payload.toolCall) {
+      await this.runTools(payload.toolCall.functionCalls ?? []);
+      return;
+    }
+    // The model gave up on calls it had asked for (the driver interrupted).
+    // Nothing to undo: results are only ever sent for calls we actually ran.
+    if (payload.toolCallCancellation) return;
+
     const content = payload.serverContent;
     if (!content) return;
 
     // What the driver said. Accumulated rather than replaced: it arrives in
     // fragments as recognition firms up.
     const heard = content.inputTranscription?.text;
-    if (typeof heard === "string") this.transcript += heard;
+    if (typeof heard === "string" && heard) {
+      // New words from the driver start a new turn, whatever became of the
+      // last one. Clearing here as well as on turnComplete is what keeps a
+      // tapped-away reply from muting the next one: an interrupted generation
+      // is not guaranteed to close its own turn, and nothing else would ever
+      // lift the suppression.
+      this.suppressed = false;
+      this.heard += heard;
+      this.touch();
+    }
 
-    // Audio reaches the speaker only when we asked for it.
-    //
-    // This one condition is what keeps a second voice out of the car. Closing
-    // the driver's turn makes the model answer whether we want it to or not,
-    // and what it answers is invention — it has no tools and no connection to
-    // the car. Playing every chunk that arrived is how that invention came out
-    // of the speaker in the assistant's own voice: "the battery is at 85%".
-    if (this.speaking) {
-      for (const part of content.modelTurn?.parts ?? []) {
-        const audio = part.inlineData?.data;
-        if (audio) this.play(decodeBase64(audio));
+    const said = content.outputTranscription?.text;
+    if (typeof said === "string" && said && !this.suppressed) {
+      // The model has started answering, so whatever was heard is a finished
+      // question — hand it up now, in the order it was said, rather than after
+      // the answer it produced.
+      this.flushHeard();
+      this.said += said;
+      this.touch();
+    }
+
+    for (const part of content.modelTurn?.parts ?? []) {
+      const audio = part.inlineData?.data;
+      if (!audio || this.suppressed) continue;
+      if (!this.speaking) {
+        this.speaking = true;
+        // Anything the microphone picks up from here belongs to the reply, not
+        // to the next question — echo cancellation is good, not perfect.
+        this.clearTurnAudio();
+        this.handlers.onPhase("speaking");
       }
+      this.touch();
+      this.play(decodeBase64(audio));
     }
 
     if (content.interrupted) {
-      // The model stopped because we told it the driver was talking.
+      // The driver talked over the answer. Stop it mid-word — that is what an
+      // interruption means — and keep whatever was said up to that point, so
+      // the log matches what was actually heard in the car.
       this.stopPlayback();
-    }
-    if (content.turnComplete && this.speaking && this.playingSources === 0) {
       this.speaking = false;
-      this.handlers.onSpokenEnd();
+      this.flushSaid();
+      this.handlers.onPhase("listening");
+      this.touch();
     }
+
+    if (content.turnComplete) {
+      this.suppressed = false;
+      this.flushHeard();
+      this.flushSaid();
+      // Audio is queued ahead of the cursor, so the turn being complete is not
+      // the same as the car having heard it. play()'s onended settles the
+      // phase when the queue actually drains.
+      if (!this.speaking || this.playingSources === 0) {
+        this.speaking = false;
+        this.handlers.onPhase("listening");
+      }
+    }
+  }
+
+  /**
+   * Run what the model asked for, then tell it what happened.
+   *
+   * Sequentially, and that is a decision rather than an oversight: the backend
+   * shares an "awake" cache and a wake-and-retry across calls, so two
+   * concurrent commands would race to wake one car.
+   *
+   * A failure is reported to the model rather than thrown away — it can say
+   * the charger lookup failed, or try a different one, which is a better car
+   * than one that goes silent.
+   */
+  private async runTools(
+    calls: { id?: string; name: string; args?: Record<string, unknown> }[]
+  ): Promise<void> {
+    if (!calls.length) return;
+    this.suppressed = false;
+    this.flushHeard();
+    this.handlers.onPhase("thinking");
+    this.touch();
+
+    const responses: Record<string, unknown>[] = [];
+    for (const call of calls) {
+      const args = call.args ?? {};
+      try {
+        const outcome = await runLiveTool(call.name, args);
+        this.handlers.onTool({
+          tool: call.name,
+          args,
+          ok: outcome.ok,
+          confirm: outcome.confirm ?? null,
+        });
+        responses.push({
+          id: call.id,
+          name: call.name,
+          response: outcome.ok ? { result: outcome.result } : { error: outcome.error },
+        });
+      } catch (e) {
+        // The backend was unreachable, or the session lapsed. Say so to the
+        // model; the caller finds out separately when its own polling fails.
+        this.handlers.onTool({ tool: call.name, args, ok: false, confirm: null });
+        responses.push({
+          id: call.id,
+          name: call.name,
+          response: { error: e instanceof Error ? e.message : "tool call failed" },
+        });
+      }
+      if (this.closed) return;
+    }
+
+    this.touch();
+    this.send({ toolResponse: { functionResponses: responses } });
+  }
+
+  /** Hold on to the driver's audio, oldest dropped once the cap is reached —
+   *  a turn that has run half a minute is no longer the sentence we want. */
+  private keepForTranscription(samples: Float32Array): void {
+    this.turnAudio.push(samples);
+    this.turnSamples += samples.length;
+    const cap = INPUT_RATE * MAX_TURN_SECONDS;
+    while (this.turnSamples > cap && this.turnAudio.length > 1) {
+      this.turnSamples -= this.turnAudio.shift()!.length;
+    }
+  }
+
+  private clearTurnAudio(): void {
+    this.turnAudio = [];
+    this.turnSamples = 0;
+  }
+
+  /** The turn's audio as a WAV, and the buffer emptied. Null when there is too
+   *  little to be a sentence — the server would reject it as silence anyway,
+   *  and a request spent finding that out is a request wasted. */
+  private takeTurnAudio(): Blob | null {
+    const samples = this.turnSamples;
+    const chunks = this.turnAudio;
+    this.clearTurnAudio();
+    if (samples < INPUT_RATE * 0.3) return null;
+
+    const merged = new Float32Array(samples);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return encodeWav(merged, INPUT_RATE);
+  }
+
+  private flushHeard(): void {
+    const text = this.heard.trim();
+    this.heard = "";
+    if (!text) return;
+    this.handlers.onUserTranscript(text, this.takeTurnAudio());
+  }
+
+  private flushSaid(): void {
+    const text = this.said.trim();
+    this.said = "";
+    if (text) this.handlers.onAssistantTranscript(text);
+  }
+
+  /** Something happened that means somebody is still there. */
+  private touch(): void {
+    this.idleAt = Date.now();
+  }
+
+  private send(message: unknown): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify(message));
   }
 
   // --- microphone -------------------------------------------------------
@@ -236,184 +587,144 @@ export class LiveSession {
     }
     if (this.inputContext!.state === "suspended") await this.inputContext!.resume();
 
-    const source = this.inputContext!.createMediaStreamSource(this.stream!);
-    const processor = this.inputContext!.createScriptProcessor(4096, 1, 1);
-    processor.onaudioprocess = (event) =>
-      this.onFrame(new Float32Array(event.inputBuffer.getChannelData(0)));
-    source.connect(processor);
+    this.source = this.inputContext!.createMediaStreamSource(this.stream!);
+    this.node = await this.buildNode();
+    this.source.connect(this.node);
     // Safari will not pull frames through a node that reaches nothing.
     const mute = this.inputContext!.createGain();
     mute.gain.value = 0;
-    processor.connect(mute);
+    this.node.connect(mute);
     mute.connect(this.inputContext!.destination);
-    this.node = processor;
   }
 
   /**
-   * Every frame does three things: decide whether it is speech, forward it to
-   * Google, and decide whether the turn has ended.
+   * Take the microphone off the main thread.
    *
-   * The speech test is the same spectral one the recorder uses, and for the
-   * same reason — a thump on a seat is loud, and loudness was never the
-   * signal. Reusing it also means the two paths cannot disagree about what
-   * counts as someone talking.
+   * This path streamed through a ScriptProcessorNode, which is deprecated for
+   * a concrete reason the recorder has known about since it was written: it
+   * runs on the main thread, so a React re-render can make it drop samples
+   * mid-sentence. That is worse here than there. The recorder merely collects
+   * frames; this file was also encoding base64 and pushing a WebSocket message
+   * inside the same callback, on the same thread that renders the chat — while
+   * the driver was talking and the list was growing. Dropped samples do not
+   * announce themselves. They arrive at the model as a sentence with holes in
+   * it, and it answers the sentence it heard.
+   *
+   * Same worklet the recorder loads, so there is one audio-thread module to
+   * keep working rather than two. The ScriptProcessor stays as the fallback:
+   * occasional dropped samples beat no microphone at all.
+   */
+  private async buildNode(): Promise<AudioNode> {
+    const context = this.inputContext!;
+    try {
+      await context.audioWorklet.addModule("/amp-recorder-worklet.js");
+      const worklet = new AudioWorkletNode(context, "amp-recorder");
+      worklet.port.onmessage = (event) => this.onFrame(event.data as Float32Array);
+      return worklet;
+    } catch {
+      const processor = context.createScriptProcessor(4096, 1, 1);
+      processor.onaudioprocess = (event) =>
+        this.onFrame(new Float32Array(event.inputBuffer.getChannelData(0)));
+      return processor;
+    }
+  }
+
+  /**
+   * Collect the frame, and light the level meter.
+   *
+   * The worklet hands over 128 samples at a time — eight milliseconds. Sending
+   * each one as its own message would be a WebSocket frame every 8 ms, all of
+   * it base64 and JSON, which is how you turn an audio-thread fix back into a
+   * main-thread problem. They are gathered into CHUNK_MS instead and sent in
+   * one piece, which is also the cadence a streaming recogniser expects.
+   *
+   * No speech detection here any more. Deciding where a turn ends is the
+   * model's job now — it has the whole utterance and far better evidence than
+   * a peak level — and doing it in two places was how the old path ended up
+   * asking for answers nobody wanted. The peak that remains drives the
+   * listening indicator and nothing else, throttled because a state update
+   * 125 times a second is exactly the render pressure that made the old
+   * capture drop samples.
    */
   private onFrame(frame: Float32Array): void {
-    if (!this.listening || this.socket?.readyState !== WebSocket.OPEN) return;
+    if (this.closed || this.socket?.readyState !== WebSocket.OPEN) return;
 
     let peak = 0;
     for (let i = 0; i < frame.length; i++) peak = Math.max(peak, Math.abs(frame[i]));
-    this.handlers.onLevel?.(peak);
-
-    this.analyse(frame);
-    this.sendAudio(frame);
-
+    this.framePeak = Math.max(this.framePeak, peak);
     const now = Date.now();
-    if (peak >= 0.02) this.lastLoudAt = now;
+    if (now - this.lastLevelAt >= LEVEL_INTERVAL_MS) {
+      this.lastLevelAt = now;
+      this.handlers.onLevel?.(this.framePeak);
+      this.framePeak = 0;
+    }
 
-    if (this.speaking && this.hasSpeech()) {
-      // Talking over the assistant. Tell the model to stop, and let the caller
-      // treat this as the start of a new question.
-      this.speaking = false;
-      this.stopPlayback();
-      this.handlers.onBargeIn();
+    // With barge-in off the uplink goes quiet while the assistant talks, so
+    // neither the reply leaking through the speaker nor the driver's own voice
+    // can cut it short. A tap still interrupts.
+    if (this.speaking && !this.allowBargeIn) {
+      this.pending = [];
+      this.pendingSamples = 0;
       return;
     }
 
-    if (this.hasSpeech() && now - this.lastLoudAt >= SILENCE_MS) {
-      this.endTurn();
-      return;
-    }
-    if (!this.hasSpeech() && now - this.turnStartedAt >= NO_SPEECH_MS) {
-      this.resetTurn();
-      this.handlers.onSilence();
-    }
-  }
+    this.pending.push(frame);
+    this.pendingSamples += frame.length;
 
-  private analyse(frame: Float32Array): void {
-    let source = frame;
-    if (this.pendingBlock?.length) {
-      const merged = new Float32Array(this.pendingBlock.length + frame.length);
-      merged.set(this.pendingBlock, 0);
-      merged.set(frame, this.pendingBlock.length);
-      source = merged;
-    }
-    let offset = 0;
-    while (offset + BLOCK_SIZE <= source.length) {
-      const { inBand, consonant } = classifyBlock(source.subarray(offset, offset + BLOCK_SIZE));
-      if (inBand) this.inBandSamples += HOP_SIZE;
-      if (consonant) this.consonantSamples += HOP_SIZE;
-      offset += HOP_SIZE;
-    }
-    this.pendingBlock = offset < source.length ? source.slice(offset) : null;
-  }
-
-  private hasSpeech(): boolean {
+    // Measured against the context's real rate, so a chunk is the same length
+    // of *time* whatever rate the browser decided to give us.
     const rate = this.inputContext?.sampleRate ?? INPUT_RATE;
-    const ms = (samples: number) => (samples / rate) * 1000;
-    return (
-      ms(this.inBandSamples) >= SPEECH_EVIDENCE.minInBandMs &&
-      ms(this.consonantSamples) >= SPEECH_EVIDENCE.minConsonantMs
-    );
-  }
+    if (this.pendingSamples < (rate * CHUNK_MS) / 1000) return;
 
-  private sendAudio(frame: Float32Array): void {
-    const pcm = new Int16Array(frame.length);
-    for (let i = 0; i < frame.length; i++) {
-      const s = Math.max(-1, Math.min(1, frame[i]));
+    const merged = new Float32Array(this.pendingSamples);
+    let offset = 0;
+    for (const chunk of this.pending) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    this.pending = [];
+    this.pendingSamples = 0;
+
+    // The context's real rate, not the one that was asked for.
+    const samples = resample(merged, rate, INPUT_RATE);
+    this.keepForTranscription(samples);
+    const pcm = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
       pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
-    if (!this.activityOpen) {
-      this.socket!.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
-      this.activityOpen = true;
-    }
-    this.socket!.send(
-      JSON.stringify({
-        realtimeInput: {
-          audio: {
-            mimeType: `audio/pcm;rate=${INPUT_RATE}`,
-            data: encodeBase64(new Uint8Array(pcm.buffer)),
-          },
+    this.send({
+      realtimeInput: {
+        audio: {
+          mimeType: `audio/pcm;rate=${INPUT_RATE}`,
+          data: encodeBase64(new Uint8Array(pcm.buffer)),
         },
-      })
-    );
+      },
+    });
   }
 
   // --- turns ------------------------------------------------------------
 
-  /** Open the microphone for the driver's next turn. */
-  listen(): void {
-    this.resetTurn();
-    this.listening = true;
-  }
-
-  private resetTurn(): void {
-    this.transcript = "";
-    this.inBandSamples = 0;
-    this.consonantSamples = 0;
-    this.pendingBlock = null;
-    this.lastLoudAt = 0;
-    this.turnStartedAt = Date.now();
-  }
-
   /**
-   * End the driver's turn and hand up whatever was heard.
+   * Cut the answer off — the tap on the bar, and the only interruption
+   * available when voice barge-in is switched off.
    *
-   * `activityEnd` has to be sent, and it has an unwanted consequence that is
-   * handled rather than avoided. Both halves of that were measured:
-   *
-   * Sending it makes the session answer in its own words. Asked "jaki jest
-   * stan baterii" — with a system instruction telling it never to answer — it
-   * replied "poziom naładowania baterii wynosi 85%". It has no connection to
-   * the car. It invented the number, confidently, in a voice the driver cannot
-   * tell from the assistant's. The instruction never stood a chance: it asked
-   * for silence while the protocol asked for speech.
-   *
-   * The obvious fix — don't send it — was tried and is worse: without it no
-   * transcript arrives at all. Recognition materialises when the turn closes.
-   *
-   * So the turn is closed, the model answers into the void, and that answer is
-   * simply never played: see onMessage, where audio only reaches the speaker
-   * while `speaking` is set, which happens in speak() and nowhere else. It
-   * costs tokens to generate a reply nobody hears, which is a fair price for
-   * the driver never hearing a number that was made up.
+   * Nothing is sent to the model, and that is the point. The obvious message
+   * to send is a completed empty turn, which is also an instruction to
+   * generate: it would answer a question nobody asked, in its own words, which
+   * is the exact failure this file was rewritten to remove. So the rest of the
+   * reply is simply dropped as it arrives — silenced here, not cancelled
+   * there. Interrupting by *voice* is different and needs no help: the model's
+   * own turn detection hears it and stops, and says so with `interrupted`.
    */
-  endTurn(): void {
-    if (!this.listening) return;
-    this.listening = false;
-    if (this.activityOpen && this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
-      this.activityOpen = false;
-    }
-    // Give the last fragments a moment to arrive; transcription trails the
-    // audio slightly and cutting here would clip the final word.
-    setTimeout(() => {
-      const text = this.transcript.trim();
-      if (text) this.handlers.onTranscript(text);
-      else this.handlers.onSilence();
-    }, 350);
-  }
-
-  /**
-   * Have the session read the assistant's answer aloud.
-   *
-   * Sent as a turn the model must complete, which is the only time it is ever
-   * asked to generate. The instruction to read verbatim lives in the system
-   * prompt (see backend/app/live.py) — repeated here in the turn itself
-   * because a model that has been quiet for a while drifts, and repetition is
-   * cheap next to it improvising an answer to the driver.
-   */
-  speak(text: string): void {
-    if (this.socket?.readyState !== WebSocket.OPEN) return;
-    this.speaking = true;
-    this.socket.send(
-      JSON.stringify({
-        clientContent: {
-          turns: [{ role: "user", parts: [{ text: `Przeczytaj dokładnie te słowa: ${text}` }] }],
-          turnComplete: true,
-        },
-      })
-    );
+  interrupt(): void {
+    if (!this.speaking) return;
+    this.stopPlayback();
+    this.speaking = false;
+    this.suppressed = true;
+    this.flushSaid();
+    this.handlers.onPhase("listening");
+    this.touch();
   }
 
   // --- playback ---------------------------------------------------------
@@ -460,9 +771,9 @@ export class LiveSession {
     this.playingSources += 1;
     source.onended = () => {
       this.playingSources -= 1;
-      if (this.playingSources === 0 && this.speaking) {
+      if (this.playingSources === 0 && this.speaking && !this.closed) {
         this.speaking = false;
-        this.handlers.onSpokenEnd();
+        this.handlers.onPhase("listening");
       }
     };
   }
@@ -480,25 +791,71 @@ export class LiveSession {
     this.playingSources = 0;
   }
 
+  /**
+   * End the session and give the microphone back.
+   *
+   * Every release is its own statement rather than one shared `try`. That is
+   * the whole bug it fixes: the microphone used to be stopped in the middle of
+   * a block that started by disconnecting audio nodes, so one throw on the way
+   * — a context already closed, a node already gone — skipped it, and Chrome
+   * went on showing the tab as recording after the conversation had visibly
+   * ended. The stream is released first now, because it is the only step whose
+   * absence is visible from outside the app.
+   */
   stop(): void {
-    this.listening = false;
+    this.closed = true;
     this.speaking = false;
-    this.stopPlayback();
+    if (this.idleTimer) clearInterval(this.idleTimer);
+    this.idleTimer = null;
+
+    try {
+      this.stream?.getTracks().forEach((track) => track.stop());
+    } catch {
+      // already stopped
+    }
+    this.stream = null;
+
+    // Detached before the context closes, so neither capture path goes on
+    // handing over frames it would try to encode against a socket that is
+    // already going away.
+    try {
+      if (this.node && "port" in this.node) {
+        (this.node as AudioWorkletNode).port.onmessage = null;
+      } else if (this.node) {
+        (this.node as ScriptProcessorNode).onaudioprocess = null;
+      }
+    } catch {
+      // already torn down
+    }
+    this.pending = [];
+    this.pendingSamples = 0;
+    this.clearTurnAudio();
+    try {
+      this.source?.disconnect();
+    } catch {
+      // already disconnected
+    }
     try {
       this.node?.disconnect();
-      this.stream?.getTracks().forEach((t) => t.stop());
+    } catch {
+      // already disconnected
+    }
+    try {
       this.inputContext?.close();
     } catch {
-      // torn down already
+      // already closed
     }
+    this.source = null;
+    this.node = null;
+    this.inputContext = null;
+
+    this.stopPlayback();
+
     try {
       this.socket?.close();
     } catch {
       // already closing
     }
     this.socket = null;
-    this.stream = null;
-    this.inputContext = null;
-    this.node = null;
   }
 }
