@@ -18,6 +18,7 @@ from app.auth import gate, passkey
 from app.config import get_settings
 from app.llm import build_orchestrator
 from app.llm import persona
+from app import persona_store
 from app.tesla.adapter import build_adapter
 from app.auth.oauth import disconnect, exchange_code, get_authorize_url, has_tokens
 
@@ -352,6 +353,20 @@ class ChatRequest(BaseModel):
     persona_style: str | None = None
 
 
+async def _persona_style(req: Any) -> str | None:
+    """The words behind the manner a request names.
+
+    The store first, always: it is where the owner wrote them, through a gated
+    route, and it is the copy the settings screen is showing. `persona_style`
+    on the request survives as a fallback for one case and it is worth naming —
+    a browser still running the build that kept manners in its own storage,
+    which sends the text because it has nowhere else to keep it. That client
+    goes away on the next load; the field can go with it.
+    """
+    stored = await persona_store.style_for(req.persona)
+    return stored or req.persona_style
+
+
 class ChatResponse(BaseModel):
     reply: str
     history: list[dict[str, Any]]
@@ -371,7 +386,7 @@ async def health() -> dict[str, str]:
 async def chat(req: ChatRequest) -> ChatResponse:
     try:
         result = await orchestrator.chat(
-            req.message, req.history, req.language, req.persona, req.persona_style
+            req.message, req.history, req.language, req.persona, await _persona_style(req)
         )
     except Exception as e:
         # Without this, any downstream failure (LLM rate limit, LLM outage,
@@ -489,7 +504,7 @@ async def live_token(req: LiveTokenRequest) -> dict[str, Any]:
             req.language,
             req.avoid,
             req.persona,
-            req.persona_style,
+            await _persona_style(req),
         )
     except live.LiveUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
@@ -555,14 +570,49 @@ async def personas() -> dict[str, Any]:
     labels stay in the app — they are translated, and this server has no
     business holding UI copy.
 
-    Says nothing about the owner's own personas: those live on the phone and
-    the server only ever sees them one request at a time.
+    The owner's own manners come with them. They are kept here rather than on
+    one phone (see app/persona_store.py), so this is the list, not a list — the
+    same on the laptop, the same after a browser clears its storage, the same
+    after a redeploy.
     """
     return {
         "personas": persona.known(),
         "default": persona.DEFAULT_PERSONA,
         "max_style_chars": persona.MAX_CUSTOM_CHARS,
+        "max_name_chars": persona_store.MAX_NAME_CHARS,
+        "max_custom": persona_store.MAX_PERSONAS,
+        "custom": await persona_store.list_personas(),
     }
+
+
+class PersonaSaveRequest(BaseModel):
+    name: str | None = None
+    style: str
+    # Names an existing manner to overwrite, and carries the ids that came off
+    # a phone the first time the app ran against a server that keeps them.
+    id: str | None = None
+
+
+@app.post("/personas/custom")
+async def persona_save(req: PersonaSaveRequest) -> dict[str, Any]:
+    """Write one of the owner's own manners. Behind the session gate like
+    everything else, which is what makes this the only way words reach a system
+    prompt: /chat names an id and looks the text up, rather than accepting
+    whatever prompt text a request cares to carry."""
+    try:
+        return {"custom": await persona_store.save_persona(req.name or "", req.style, req.id)}
+    except persona_store.PersonaLimit as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.delete("/personas/custom/{persona_id}")
+async def persona_delete(persona_id: str) -> dict[str, Any]:
+    try:
+        return {"custom": await persona_store.delete_persona(persona_id)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 class PersonaPreviewRequest(BaseModel):

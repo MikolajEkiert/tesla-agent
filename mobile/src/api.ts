@@ -191,14 +191,56 @@ export async function sendMessage(
  * would eventually offer one the server has forgotten. A failure leaves the
  * app's own constants in place, which is the list it was built against.
  */
+export interface StoredPersona {
+  id: string;
+  name: string;
+  style: string;
+}
+
 export async function fetchPersonas(): Promise<{
   personas: string[];
   default: string;
   max_style_chars: number;
+  max_name_chars: number;
+  max_custom: number;
+  /** The owner's own manners, kept on the server so they are the same list on
+   *  every device — see backend/app/persona_store.py. */
+  custom: StoredPersona[];
 }> {
   const res = await fetch(`${DEFAULT_BASE_URL}/personas`, CREDENTIALS);
   await guard(res);
   return res.json();
+}
+
+/**
+ * Write one of the owner's manners, and get the list back as it now stands.
+ *
+ * `id` overwrites an existing one — and carries the ids of manners that were
+ * written before they were kept here, so one that was already selected stays
+ * selected when its words move to the server.
+ */
+export async function saveCustomPersona(
+  name: string,
+  style: string,
+  id?: string
+): Promise<StoredPersona[]> {
+  const res = await fetch(`${DEFAULT_BASE_URL}/personas/custom`, {
+    ...CREDENTIALS,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name, style, id }),
+  });
+  await guard(res);
+  return (await res.json()).custom ?? [];
+}
+
+export async function deleteCustomPersona(id: string): Promise<StoredPersona[]> {
+  const res = await fetch(`${DEFAULT_BASE_URL}/personas/custom/${encodeURIComponent(id)}`, {
+    ...CREDENTIALS,
+    method: "DELETE",
+  });
+  await guard(res);
+  return (await res.json()).custom ?? [];
 }
 
 /**

@@ -594,30 +594,42 @@ export function ChatScreen({
       const stored = id
         ? updateCustomPersona(id, name, style)
         : addCustomPersona(name, style);
-      stored.then((list) => {
-        setCustomPersonas(list);
-        // Selecting a new manner as it is created: writing one and then having
-        // to find and tap it is a second step nobody wants, and the reason to
-        // write it was to use it. Editing an existing one does not steal the
-        // selection — it may not be the one in use.
-        if (!id) {
-          const added = list[list.length - 1];
-          if (added) changePersona(added.id);
-        }
-      });
+      stored
+        .then((list) => {
+          setCustomPersonas(list);
+          // Selecting a new manner as it is created: writing one and then
+          // having to find and tap it is a second step nobody wants, and the
+          // reason to write it was to use it. Editing an existing one does not
+          // steal the selection — it may not be the one in use.
+          if (!id) {
+            const added = list[list.length - 1];
+            if (added) changePersona(added.id);
+          }
+        })
+        // Manners are kept on the server now, so writing one is a request and
+        // a request can fail. Saying so matters more than it used to: the form
+        // closes on save, and a failure nobody mentions is a manner the owner
+        // believes they wrote.
+        .catch((e) =>
+          setError(e instanceof BackendError ? e.message : t("personaSaveFailed"))
+        );
     },
-    [changePersona]
+    [changePersona, t]
   );
 
   const removeCustomPersona = useCallback(
     (id: string) => {
-      deleteCustomPersona(id).then(setCustomPersonas);
+      deleteCustomPersona(id)
+        .then(setCustomPersonas)
+        .catch((e) =>
+          setError(e instanceof BackendError ? e.message : t("personaSaveFailed"))
+        );
       // The selection cannot be left pointing at something deleted: the server
       // reads an unknown id with no style text as the standard manner anyway,
       // so this only makes the screen agree with what would happen.
       if (persona === id) changePersona(DEFAULT_PERSONA);
     },
-    [persona, changePersona]
+    [persona, changePersona, t]
   );
 
   const changeLiveMode = useCallback((enabled: boolean) => {

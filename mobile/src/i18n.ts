@@ -180,7 +180,7 @@ const STRINGS = {
     personaCustomDelete: "Delete",
     personaCustomEdit: "Edit",
     personaCustomHint:
-      "Describe the tone in your own words. It's kept on this device and sent with each message, so a manner made here won't show up on your other ones.",
+      "Describe the tone in your own words. Manners are saved to your account, so one written here is there on every device you sign in from.",
     personaCustomFull: "That's as many as Amp keeps. Delete one to add another.",
     personaCustomDeleteTitle: "Delete this manner?",
     personaCustomDeleteBody: "It's removed from this device for good.",
@@ -192,6 +192,9 @@ const STRINGS = {
     spokeOne: "You spoke for {n} second",
     spokeFew: "You spoke for {n} seconds",
     spokeMany: "You spoke for {n} seconds",
+    // Manners are kept on the server, so writing one can fail the way any
+    // request can.
+    personaSaveFailed: "Couldn't save that manner. Check the connection and try again.",
     personaAdditions: "Amp will fill in: {items}.",
     personaAdditionTerse: "reading it as a register rather than a catchphrase",
     personaAdditionLength: "keeping to a sentence or two",
@@ -366,7 +369,7 @@ const STRINGS = {
     personaCustomDelete: "Usuń",
     personaCustomEdit: "Edytuj",
     personaCustomHint:
-      "Opisz ton własnymi słowami. Zostaje na tym urządzeniu i jedzie z każdą wiadomością, więc charakter stworzony tutaj nie pojawi się na innych.",
+      "Opisz ton własnymi słowami. Charaktery są zapisane przy Twoim koncie, więc ten stworzony tutaj masz na każdym urządzeniu, na którym się zalogujesz.",
     personaCustomFull: "Tyle Amp przechowuje. Usuń jeden, żeby dodać kolejny.",
     personaCustomDeleteTitle: "Usunąć ten charakter?",
     personaCustomDeleteBody: "Zniknie z tego urządzenia na dobre.",
@@ -374,6 +377,7 @@ const STRINGS = {
     spokeOne: "Mówiłeś przez {n} sekundę",
     spokeFew: "Mówiłeś przez {n} sekundy",
     spokeMany: "Mówiłeś przez {n} sekund",
+    personaSaveFailed: "Nie udało się zapisać charakteru. Sprawdź połączenie i spróbuj ponownie.",
     personaAdditions: "Amp dopisze: {items}.",
     personaAdditionTerse: "potraktowanie tego jako stylu, nie powiedzonka",
     personaAdditionLength: "trzymanie się jednego–dwóch zdań",

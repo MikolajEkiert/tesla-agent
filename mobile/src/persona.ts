@@ -16,6 +16,11 @@
  * manner rather than failing (see backend `resolve`).
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  deleteCustomPersona as removeCustomPersona,
+  fetchPersonas,
+  saveCustomPersona,
+} from "./api";
 import type { TranslationKey } from "./i18n";
 
 /** Kept in step with PERSONAS in backend/app/llm/persona.py. An id here that
@@ -48,8 +53,8 @@ export const MAX_NAME_CHARS = 24;
 export const MAX_CUSTOM_PERSONAS = 12;
 
 export interface CustomPersona {
-  /** Also what is sent as `persona`. Random rather than derived from the name,
-   *  so renaming one later cannot collide with another. */
+  /** Also what is sent as `persona`. Minted by the server, which is where
+   *  these live — see backend/app/persona_store.py. */
   id: string;
   name: string;
   /** The owner's description of how to sound, sent as `persona_style`. */
@@ -58,6 +63,8 @@ export interface CustomPersona {
 
 const SELECTED_KEY = "amp.persona";
 const CUSTOM_KEY = "amp.personas.custom";
+/** Set once this device has handed its own manners to the server. */
+const MIGRATED_KEY = "amp.personas.migrated";
 
 export const BUILT_IN_LABELS: Record<string, TranslationKey> = {
   standard: "personaStandard",
@@ -75,12 +82,6 @@ export const BUILT_IN_HINTS: Record<string, TranslationKey> = {
 
 export function isBuiltIn(id: PersonaId): boolean {
   return (BUILT_IN_PERSONAS as readonly string[]).includes(id);
-}
-
-function newPersonaId(): string {
-  // Unique enough for a dozen entries on one device, and deliberately not
-  // unguessable — these are labels for a prompt, not credentials.
-  return `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
 export async function loadPersona(): Promise<PersonaId> {
@@ -101,7 +102,47 @@ export async function savePersona(id: PersonaId): Promise<void> {
   }
 }
 
+/**
+ * The owner's manners, from the server, with the device's copy as a fallback.
+ *
+ * The server is where they live now (backend/app/persona_store.py): one list
+ * for the laptop and the phone, surviving a cleared browser store and a
+ * redeploy. What is kept here is a cache of that list, and it exists for one
+ * job — drawing the picker when the car has no signal. It is never the version
+ * that gets written to.
+ *
+ * A device that still holds manners from before they were kept server-side
+ * hands them over on the way past, ids and all, so one that was already
+ * selected stays selected. That runs once and then the local copy is only ever
+ * a mirror; a manner deleted on the laptop does not come back from the phone.
+ */
 export async function loadCustomPersonas(): Promise<CustomPersona[]> {
+  const cached = await readCache();
+  try {
+    const { custom } = await fetchPersonas();
+    let list = custom;
+    const missing = cached.filter((local) => !custom.some((p) => p.id === local.id));
+    if (missing.length && !(await migrationDone())) {
+      for (const persona of missing) {
+        try {
+          list = await saveCustomPersona(persona.name, persona.style, persona.id);
+        } catch {
+          // One that will not go up — too many, or empty after the server's
+          // own trimming — must not stop the others.
+        }
+      }
+    }
+    await markMigrated();
+    await writeCache(list);
+    return list;
+  } catch {
+    // No signal, or the session has lapsed. The cache is what the picker had
+    // last time, which is better than an empty settings screen.
+    return cached;
+  }
+}
+
+async function readCache(): Promise<CustomPersona[]> {
   try {
     const raw = await AsyncStorage.getItem(CUSTOM_KEY);
     if (!raw) return [];
@@ -122,7 +163,7 @@ export async function loadCustomPersonas(): Promise<CustomPersona[]> {
   }
 }
 
-async function saveCustomPersonas(personas: CustomPersona[]): Promise<void> {
+async function writeCache(personas: CustomPersona[]): Promise<void> {
   try {
     await AsyncStorage.setItem(CUSTOM_KEY, JSON.stringify(personas));
   } catch {
@@ -130,26 +171,40 @@ async function saveCustomPersonas(personas: CustomPersona[]): Promise<void> {
   }
 }
 
+/** Whether this device has already handed its own manners over. Without it, a
+ *  manner deleted on another device would be re-uploaded by this one on every
+ *  load, and deleting anything would become impossible. */
+async function migrationDone(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(MIGRATED_KEY)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+async function markMigrated(): Promise<void> {
+  try {
+    await AsyncStorage.setItem(MIGRATED_KEY, "1");
+  } catch {
+    // A device that cannot remember will re-offer what it holds, which the
+    // server takes as an update to the same ids. Harmless, just wasteful.
+  }
+}
+
 /**
- * Add one, and return the list as it now stands.
+ * Write one, and return the list as it now stands.
  *
- * Trimming happens here rather than at the input, so what is stored is what
- * will be sent: a name of only whitespace is not a name, and a style note is
- * capped at the same length the server would cap it at anyway.
+ * Trimming is the server's job now and it does it in one place, so what comes
+ * back is what a request will actually use. Passing an id overwrites; leaving
+ * it out creates.
  */
 export async function addCustomPersona(
   name: string,
   style: string
 ): Promise<CustomPersona[]> {
-  const persona: CustomPersona = {
-    id: newPersonaId(),
-    name: name.trim().slice(0, MAX_NAME_CHARS),
-    style: style.trim().slice(0, MAX_STYLE_CHARS),
-  };
-  const existing = await loadCustomPersonas();
-  const next = [...existing, persona].slice(-MAX_CUSTOM_PERSONAS);
-  await saveCustomPersonas(next);
-  return next;
+  const list = await saveCustomPersona(name.trim(), style.trim());
+  await writeCache(list);
+  return list;
 }
 
 export async function updateCustomPersona(
@@ -157,23 +212,15 @@ export async function updateCustomPersona(
   name: string,
   style: string
 ): Promise<CustomPersona[]> {
-  const next = (await loadCustomPersonas()).map((p) =>
-    p.id === id
-      ? {
-          ...p,
-          name: name.trim().slice(0, MAX_NAME_CHARS),
-          style: style.trim().slice(0, MAX_STYLE_CHARS),
-        }
-      : p
-  );
-  await saveCustomPersonas(next);
-  return next;
+  const list = await saveCustomPersona(name.trim(), style.trim(), id);
+  await writeCache(list);
+  return list;
 }
 
 export async function deleteCustomPersona(id: string): Promise<CustomPersona[]> {
-  const next = (await loadCustomPersonas()).filter((p) => p.id !== id);
-  await saveCustomPersonas(next);
-  return next;
+  const list = await removeCustomPersona(id);
+  await writeCache(list);
+  return list;
 }
 
 /**
