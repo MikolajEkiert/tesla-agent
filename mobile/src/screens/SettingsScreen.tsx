@@ -253,10 +253,22 @@ export function SettingsScreen({
   };
 
   return (
-    // Bottom only: this is rendered over the chat, inside a SafeAreaView that
-    // has already stepped around the notch, and claiming the top inset a second
-    // time pushed the header a notch's worth down the screen.
-    <SafeAreaView style={styles.safe} edges={["bottom"]}>
+    // Both edges, and the top one is not a second helping.
+    //
+    // It was dropped when this screen was rendered inline, inside the chat's
+    // own SafeAreaView, where the notch had already been stepped around and
+    // claiming it again pushed the header a notch's worth down. In the same
+    // commit it became an overlay — absoluteFill — and that quietly undid the
+    // premise: an absolutely positioned box is laid out against its ancestor's
+    // *padding box*, so it starts above the padding rather than after it. The
+    // screen has been drawn under the status bar ever since.
+    //
+    // Invisible in a browser tab, where Safari's own chrome offsets the page
+    // and every inset reads zero. It shows up only in the installed app, which
+    // asks for the whole screen (apple-mobile-web-app-status-bar-style is
+    // black-translucent) and gets it — clock over the title, battery over
+    // "Done".
+    <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       {/* The rule spans the window; what sits on it does not. On a laptop a
           header pinned to both edges puts "Done" a hand's width from the title
           it belongs to. */}
