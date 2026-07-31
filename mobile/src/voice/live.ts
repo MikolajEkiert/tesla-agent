@@ -327,6 +327,17 @@ export class LiveSession {
       // closing line, which is the whole thing being fixed. END_GRACE_MS is
       // the guard for that window instead.
       if (this.endAfterReply) return;
+      // Nor while the assistant is talking.
+      //
+      // touch() is driven by things arriving over the socket, and a reply
+      // arrives far faster than it is heard: a fifteen-second answer can be
+      // delivered in two and then plays out with no further events at all.
+      // Echo cancellation removes it from the microphone, so nothing else
+      // resets the clock either, and five seconds later the session was torn
+      // down over the top of a sentence the car was still saying. That is not
+      // silence — it is the opposite of silence — and this is what "cut off
+      // while the agent is answering" was.
+      if (this.speaking || this.playingSources > 0) return;
       if (!this.closed && Date.now() - this.idleAt >= IDLE_TIMEOUT_MS) {
         this.handlers.onIdle();
       }
@@ -930,7 +941,12 @@ export class LiveSession {
       // The queue is empty — which means the turn is over only if the server
       // has also said so. Otherwise this is a gap between chunks and there is
       // more of the sentence still to come.
-      if (this.playingSources === 0 && !this.closed) this.maybeSettle();
+      if (this.playingSources === 0 && !this.closed) {
+        // The five seconds of silence start here, when the car stopped
+        // talking — not when the last chunk of it arrived.
+        this.touch();
+        this.maybeSettle();
+      }
     };
   }
 

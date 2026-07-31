@@ -287,6 +287,22 @@ export function ChatScreen({
     setConversationPhase(phase);
   }, []);
 
+  /**
+   * Add rows and keep them in view.
+   *
+   * Every row a conversation produces goes through here. Following the latest
+   * message is otherwise conditional on the reader already being at the bottom,
+   * which is the right rule for a transcript being browsed and the wrong one
+   * for a conversation being had: a spoken exchange writes itself while the
+   * driver is looking at the road, and one stray touch that scrolled the list
+   * a few points left it stranded for the rest of the session, with every
+   * answer landing below the fold.
+   */
+  const appendItems = useCallback((rows: ChatItem[]) => {
+    atBottomRef.current = true;
+    setItems((prev) => [...prev, ...rows]);
+  }, []);
+
   /** The meter, at a rate a screen can actually show. */
   const reportLevel = useCallback((value: number) => {
     const now = Date.now();
@@ -979,10 +995,7 @@ export function ChatScreen({
       if (result.ok) {
         awaitingVoiceConfirmRef.current = null;
         emptyTurnsRef.current = 0;
-        setItems((prev) => [
-          ...prev,
-          { kind: "message", id: id(), role: "assistant", text: t("confirmExecuted") },
-        ]);
+        appendItems([{ kind: "message", id: id(), role: "assistant", text: t("confirmExecuted") }]);
         refreshVehicle();
         refreshScheduled();
         speakThen(t("confirmExecuted"));
@@ -999,10 +1012,7 @@ export function ChatScreen({
 
     if (outcome === "cancelled") {
       awaitingVoiceConfirmRef.current = null;
-      setItems((prev) => [
-        ...prev,
-        { kind: "message", id: id(), role: "assistant", text: t("confirmDismissed") },
-      ]);
+      appendItems([{ kind: "message", id: id(), role: "assistant", text: t("confirmDismissed") }]);
       speakThen(t("confirmDismissed"));
       return true;
     }
@@ -1014,10 +1024,7 @@ export function ChatScreen({
     }
     // Heard, but not the word. One nudge, then the card is tap-only.
     awaitingVoiceConfirmRef.current = null;
-    setItems((prev) => [
-      ...prev,
-      { kind: "message", id: id(), role: "assistant", text: t("voiceConfirmMissed") },
-    ]);
+    appendItems([{ kind: "message", id: id(), role: "assistant", text: t("voiceConfirmMissed") }]);
     speakThen(t("voiceConfirmMissed"));
     return true;
   };
@@ -1122,10 +1129,7 @@ export function ChatScreen({
         // spent quota — the first transcript simply stays, which is exactly
         // what was there before.
         const rowId = id();
-        setItems((prev) => [
-          ...prev,
-          { kind: "message", id: rowId, role: "user", text, heard: true },
-        ]);
+        appendItems([{ kind: "message", id: rowId, role: "user", text, heard: true }]);
         if (!audio) return;
         void transcribe(audio, language)
           .then((better) => {
@@ -1145,11 +1149,10 @@ export function ChatScreen({
           });
       },
       onAssistantTranscript: (text) => {
-        setItems((prev) => [...prev, { kind: "message", id: id(), role: "assistant", text }]);
+        appendItems([{ kind: "message", id: id(), role: "assistant", text }]);
       },
       onTool: ({ tool, args, ok, confirm }) => {
-        setItems((prev) => [
-          ...prev,
+        appendItems([
           { kind: "tool", id: id(), call: { tool, input: args, ok } },
           // Parked rather than executed. The card is the only way it runs, and
           // it is tap-only: settling one by voice needs a recording sent to
