@@ -9,8 +9,11 @@ from __future__ import annotations
 import os
 from PIL import Image, ImageDraw
 
-BG = (12, 14, 18, 255)  # #0C0E12
-BRAND = (111, 140, 255, 255)  # #6F8CFF
+# Straight from src/theme.ts. Both had drifted: the background was a shade
+# darker than the app's own canvas and the violet was the blue this brand
+# stopped using when the climate accent moved next to it.
+BG = (15, 17, 20, 255)  # #0F1114 — color.bg
+BRAND = (125, 122, 255, 255)  # #7D7AFF — color.brand
 WHITE = (255, 255, 255, 255)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -18,16 +21,23 @@ ASSETS = os.path.join(ROOT, "assets")
 PUBLIC_ICONS = os.path.join(ROOT, "public", "icons")
 PUBLIC = os.path.join(ROOT, "public")
 
-# Bolt glyph as a fraction of a unit square (0..1), a simple flat zigzag —
-# reads clearly at small sizes, ties "Amp" to its literal meaning without
-# reaching for a generic AI-sparkle icon.
+# The mark, as fractions of a unit square (0..1): the same six vertices the
+# app draws in src/components/AmpMark.tsx, so the icon on the home screen and
+# the mark in the header are one drawing rather than two that resemble each
+# other. Kept in this order — point, outer corner, inner corner, and the same
+# three turned half a turn — because the bolt is point-symmetric about its
+# centre and that is easier to check by eye than by arithmetic.
+#
+# Pillow draws polygons, so here the shape is exact. The app has no SVG
+# runtime and reaches it with two overlapping wedges; if these numbers change,
+# AmpMark's have to change with them.
 BOLT_UNIT = [
-    (0.56, 0.03),
-    (0.20, 0.56),
-    (0.44, 0.56),
-    (0.34, 0.97),
-    (0.82, 0.40),
-    (0.53, 0.40),
+    (0.6083, 0.1042),
+    (0.2417, 0.5375),
+    (0.4542, 0.5375),
+    (0.3917, 0.8958),
+    (0.7583, 0.4625),
+    (0.5458, 0.4625),
 ]
 
 
