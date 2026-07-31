@@ -201,10 +201,18 @@ export class LiveSession {
     const heard = content.inputTranscription?.text;
     if (typeof heard === "string") this.transcript += heard;
 
-    // The assistant's words, streaming back as sound.
-    for (const part of content.modelTurn?.parts ?? []) {
-      const audio = part.inlineData?.data;
-      if (audio) this.play(decodeBase64(audio));
+    // Audio reaches the speaker only when we asked for it.
+    //
+    // This one condition is what keeps a second voice out of the car. Closing
+    // the driver's turn makes the model answer whether we want it to or not,
+    // and what it answers is invention — it has no tools and no connection to
+    // the car. Playing every chunk that arrived is how that invention came out
+    // of the speaker in the assistant's own voice: "the battery is at 85%".
+    if (this.speaking) {
+      for (const part of content.modelTurn?.parts ?? []) {
+        const audio = part.inlineData?.data;
+        if (audio) this.play(decodeBase64(audio));
+      }
     }
 
     if (content.interrupted) {
@@ -348,7 +356,28 @@ export class LiveSession {
     this.turnStartedAt = Date.now();
   }
 
-  /** End the driver's turn and hand up whatever was heard. */
+  /**
+   * End the driver's turn and hand up whatever was heard.
+   *
+   * `activityEnd` has to be sent, and it has an unwanted consequence that is
+   * handled rather than avoided. Both halves of that were measured:
+   *
+   * Sending it makes the session answer in its own words. Asked "jaki jest
+   * stan baterii" — with a system instruction telling it never to answer — it
+   * replied "poziom naładowania baterii wynosi 85%". It has no connection to
+   * the car. It invented the number, confidently, in a voice the driver cannot
+   * tell from the assistant's. The instruction never stood a chance: it asked
+   * for silence while the protocol asked for speech.
+   *
+   * The obvious fix — don't send it — was tried and is worse: without it no
+   * transcript arrives at all. Recognition materialises when the turn closes.
+   *
+   * So the turn is closed, the model answers into the void, and that answer is
+   * simply never played: see onMessage, where audio only reaches the speaker
+   * while `speaking` is set, which happens in speak() and nowhere else. It
+   * costs tokens to generate a reply nobody hears, which is a fair price for
+   * the driver never hearing a number that was made up.
+   */
   endTurn(): void {
     if (!this.listening) return;
     this.listening = false;
