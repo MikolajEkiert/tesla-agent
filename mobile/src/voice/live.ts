@@ -90,6 +90,10 @@ const AUDIBLE_LEVEL = 0.02;
  *  side — see runTools. Never sent to /live/tool: it does nothing to the car. */
 const END_CONVERSATION_TOOL = "end_conversation";
 
+/** How long a session that asked to close waits for the closing line before
+ *  giving up on it. Covers generating and speaking one short sentence. */
+const END_GRACE_MS = 8000;
+
 /** How often the idle clock is examined. Was five seconds, which was invisible
  *  against a ninety-second timeout and would have made a five-second one mean
  *  anywhere between five and ten. */
@@ -237,6 +241,10 @@ export class LiveSession {
   /** The model asked to close the conversation; do it once it has finished
    *  saying goodbye. */
   private endAfterReply = false;
+  /** Whether any of that goodbye has actually been heard yet. */
+  private endSpoke = false;
+  /** Backstop for a model that asks to close and then says nothing. */
+  private endTimer: ReturnType<typeof setTimeout> | null = null;
   /** The rest of this reply was cut off by a tap and must not be heard or
    *  logged. Cleared when the turn ends. */
   private suppressed = false;
@@ -304,6 +312,11 @@ export class LiveSession {
     await this.startCapture();
     this.touch();
     this.idleTimer = setInterval(() => {
+      // Not while a goodbye is owed. The session is already closing; letting
+      // the idle clock win that race would tear it down over the top of the
+      // closing line, which is the whole thing being fixed. END_GRACE_MS is
+      // the guard for that window instead.
+      if (this.endAfterReply) return;
       if (!this.closed && Date.now() - this.idleAt >= IDLE_TIMEOUT_MS) {
         this.handlers.onIdle();
       }
@@ -468,6 +481,9 @@ export class LiveSession {
         this.clearTurnAudio();
         this.handlers.onPhase("speaking");
       }
+      // The farewell has started. Until this, a session asked to close has
+      // nothing to wait for and must not close — see settleTurn.
+      if (this.endAfterReply) this.endSpoke = true;
       this.touch();
       this.play(decodeBase64(audio));
     }
@@ -479,6 +495,17 @@ export class LiveSession {
       this.stopPlayback();
       this.speaking = false;
       this.flushSaid();
+      // Talking over a goodbye is not agreeing with it. Whatever they have
+      // started saying, the conversation is evidently not finished, so the
+      // pending close is dropped rather than fired at the end of this turn.
+      if (this.endAfterReply) {
+        this.endAfterReply = false;
+        this.endSpoke = false;
+        if (this.endTimer) {
+          clearTimeout(this.endTimer);
+          this.endTimer = null;
+        }
+      }
       this.handlers.onPhase("listening");
       this.touch();
     }
@@ -508,12 +535,36 @@ export class LiveSession {
    * is the worst way for this to be wrong.
    */
   private settleTurn(): void {
+    // Asked to close, but the goodbye has not been said yet.
+    //
+    // The model calls end_conversation in one turn and speaks in the next: the
+    // farewell is generated only after this side answers the tool call, so the
+    // turn carrying the call completes with no audio in it at all. Concluding
+    // there tore the session down a moment before the closing line existed,
+    // which is exactly what "it cuts off the last reply" means. So a session
+    // asked to close goes back to listening and waits for the words it was
+    // promised.
+    if (this.endAfterReply && !this.endSpoke) {
+      this.handlers.onPhase("listening");
+      return;
+    }
     if (this.endAfterReply) {
-      this.endAfterReply = false;
-      this.handlers.onConcluded();
+      this.conclude();
       return;
     }
     this.handlers.onPhase("listening");
+  }
+
+  /** The goodbye has been heard to the end. */
+  private conclude(): void {
+    if (!this.endAfterReply) return;
+    this.endAfterReply = false;
+    this.endSpoke = false;
+    if (this.endTimer) {
+      clearTimeout(this.endTimer);
+      this.endTimer = null;
+    }
+    this.handlers.onConcluded();
   }
 
   /**
@@ -551,6 +602,14 @@ export class LiveSession {
       // playing.
       if (call.name === END_CONVERSATION_TOOL) {
         this.endAfterReply = true;
+        this.endSpoke = false;
+        // A model that asks to close and then says nothing would leave the
+        // microphone open indefinitely, waiting for a goodbye that is never
+        // coming. Long enough to cover generating and speaking one short line.
+        if (this.endTimer) clearTimeout(this.endTimer);
+        this.endTimer = setTimeout(() => {
+          if (!this.closed && !this.endSpoke) this.conclude();
+        }, END_GRACE_MS);
         responses.push({ id: call.id, name: call.name, response: { result: "ok" } });
         continue;
       }
@@ -890,6 +949,11 @@ export class LiveSession {
     this.speaking = false;
     if (this.idleTimer) clearInterval(this.idleTimer);
     this.idleTimer = null;
+    // A goodbye that is no longer owed to anyone: the ✕ was pressed, or this
+    // is the teardown that the goodbye itself asked for.
+    this.endAfterReply = false;
+    if (this.endTimer) clearTimeout(this.endTimer);
+    this.endTimer = null;
 
     try {
       this.stream?.getTracks().forEach((track) => track.stop());
