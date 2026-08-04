@@ -1,5 +1,11 @@
 import { Linking, Platform } from "react-native";
-import type { AuthStatus, ChatResponse, ScheduledAction, VehicleState } from "./types";
+import type {
+  AuthStatus,
+  ChatResponse,
+  ScheduledAction,
+  ToolCall,
+  VehicleState,
+} from "./types";
 
 /**
  * Web (the deployed PWA) defaults to same-origin — Caddy already routes
@@ -33,6 +39,19 @@ export class BackendError extends Error {}
  * locked app never looks like a broken one.
  */
 export class NotUnlockedError extends Error {}
+
+/**
+ * A turn that was waiting for the car to wake never produced its answer — the
+ * poll ran out of patience, or the backend had already forgotten the turn by
+ * the time we asked (its store keeps a finished turn for five minutes).
+ *
+ * Separate from BackendError because there is nothing to relay: the message a
+ * server would have sent does not exist, so the caller supplies its own
+ * translated sentence and offers to ask again. What must not happen is the
+ * caller doing nothing — the whole two-phase reply exists so the app stops
+ * sitting on "Myślę…", and a lost poll is not a licence to go back to it.
+ */
+export class PendingTurnLostError extends Error {}
 
 /** Cookies are the session carrier, so every call must send them. */
 const CREDENTIALS: RequestInit = { credentials: "include" };
@@ -157,6 +176,30 @@ async function errorDetail(res: Response): Promise<string> {
   return `Backend returned ${res.status}`;
 }
 
+/**
+ * How often the answer to a backgrounded turn is asked for, and how long that
+ * goes on.
+ *
+ * The interval is a compromise about how soon an answer feels like it arrived
+ * rather than about server load — there is one owner, and the endpoint reads a
+ * dict. The ceiling is sized off the backend's own worst case: WAKE_TIMEOUT_S
+ * is 40 seconds, MAX_TOOL_ROUNDS lets a turn wake more than once, and each
+ * round costs a model call. Three minutes is past all of that, and comfortably
+ * under the five the backend keeps a finished turn for — so giving up here is
+ * always our decision, never a race with the server forgetting.
+ */
+const POLL_INTERVAL_MS = 1200;
+const POLL_CEILING_MS = 180_000;
+
+interface SendOptions {
+  /**
+   * Called once, with the "waking the car" line, when the backend hands the
+   * turn off. The reply itself still arrives from this function's promise, so
+   * a caller that ignores this simply waits — it never sees a half-turn.
+   */
+  onInterim?: (reply: string) => void;
+}
+
 export async function sendMessage(
   message: string,
   history: Record<string, unknown>[],
@@ -165,7 +208,8 @@ export async function sendMessage(
    *  nothing else; one the owner wrote is only meaningful with its style text,
    *  which the server holds no copy of. */
   persona?: string,
-  personaStyle?: string
+  personaStyle?: string,
+  options?: SendOptions
 ): Promise<ChatResponse> {
   const res = await fetch(`${DEFAULT_BASE_URL}/chat`, {
     ...CREDENTIALS,
@@ -180,7 +224,63 @@ export async function sendMessage(
     }),
   });
   await guard(res);
-  return res.json();
+  const first: ChatResponse = await res.json();
+  if (!first.pending_id) return first;
+
+  // The car was asleep. Say so now — that sentence is the entire point of the
+  // split — and then wait for the turn the backend is still running.
+  options?.onInterim?.(first.reply);
+  return collectPendingTurn(first.pending_id);
+}
+
+/**
+ * Wait out a turn the backend is finishing in the background.
+ *
+ * A failed poll is not a failed turn. The phone doing this is in a car, and a
+ * tunnel is the ordinary case: a dropped request is retried until the ceiling,
+ * because the answer is sitting on the server either way and giving up on the
+ * first flake would throw away a reply that exists. The one exception is a
+ * dead session — that is not going to fix itself, and every other call in this
+ * file treats it as "show the passcode screen", so it is re-thrown at once.
+ */
+async function collectPendingTurn(pendingId: string): Promise<ChatResponse> {
+  const deadline = Date.now() + POLL_CEILING_MS;
+  const url = `${DEFAULT_BASE_URL}/chat/pending/${encodeURIComponent(pendingId)}`;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    let body: {
+      status?: string;
+      detail?: string;
+      reply?: string;
+      history?: Record<string, unknown>[];
+      tool_trace?: ToolCall[];
+    };
+    try {
+      const res = await fetch(url, CREDENTIALS);
+      await guard(res);
+      body = await res.json();
+    } catch (e) {
+      if (e instanceof NotUnlockedError) throw e;
+      continue;
+    }
+    if (body.status === "done") {
+      return {
+        reply: body.reply ?? "",
+        history: body.history ?? [],
+        tool_trace: body.tool_trace ?? [],
+      };
+    }
+    if (body.status === "failed") {
+      // The same message the synchronous turn would have arrived as a 502
+      // with, so the error bar reads identically either way.
+      throw new BackendError(body.detail || "The answer failed.");
+    }
+    // "working" means keep waiting; "unknown" means the backend has no such
+    // turn — expired, or a container that restarted mid-answer. Neither is
+    // worth another three minutes of politeness.
+    if (body.status === "unknown") break;
+  }
+  throw new PendingTurnLostError("pending turn lost");
 }
 
 /**
@@ -244,9 +344,27 @@ export async function deleteCustomPersona(id: string): Promise<StoredPersona[]> 
 }
 
 /**
- * Speech to text. The transcript comes back as a plain string and is then sent
- * through sendMessage like anything typed — voice adds no second path to the
- * car, which is what keeps the confirmation gate meaningful.
+ * What the server made of a recording.
+ *
+ * `text` alone was the whole answer until the owner pointed out what happens
+ * when a recording is cut off: a half sentence still reads as an instruction,
+ * so it went to /chat and was acted on. The server now says which kind of
+ * nothing it got back — `no_speech` for a recording nobody spoke into,
+ * `unclear` for one where they did and it did not arrive whole (see
+ * voice.clarity in backend/app/voice.py) — because those want different
+ * sentences from the app. `text` is empty whenever `ok` is false, so a caller
+ * that only reads it still cannot send junk on.
+ */
+export interface TranscriptResult {
+  text: string;
+  ok: boolean;
+  outcome?: "no_speech" | "unclear";
+}
+
+/**
+ * Speech to text. The transcript is then sent through sendMessage like
+ * anything typed — voice adds no second path to the car, which is what keeps
+ * the confirmation gate meaningful.
  *
  * Posts the recording as the raw body rather than multipart form data: one
  * blob, one content type, no parser on either end.
@@ -259,7 +377,7 @@ export async function transcribe(
    *  and brands exactly where the tuned transcriber is tempted to bend them
    *  onto the car's vocabulary. See _draft_clause in backend/app/voice.py. */
   draft?: string
-): Promise<string> {
+): Promise<TranscriptResult> {
   const params = new URLSearchParams();
   if (language) params.set("language", language);
   if (draft) params.set("draft", draft);
@@ -271,7 +389,13 @@ export async function transcribe(
     body: audio,
   });
   await guard(res);
-  return (await res.json()).text ?? "";
+  const body = await res.json();
+  const text: string = body.text ?? "";
+  // `ok` derived from the text when the field is absent, which is what a
+  // server from before this existed answers — the window during a deploy, or a
+  // rolled-back one. An empty transcript was always "nothing usable", so the
+  // derived value says exactly what that server meant.
+  return { text, ok: body.ok ?? Boolean(text), outcome: body.outcome };
 }
 
 /**

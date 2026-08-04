@@ -51,6 +51,12 @@ INVARIANTS = [
     "State only what the tool results actually contain",
     "Never say you are waking",
     "ask a brief clarifying question",
+    # A manner is allowed to make the assistant chatty; it is not allowed to
+    # make it chatty *about the car* again, nor to talk it back out of knowing
+    # things. Both halves of the reframing below are style-proof for the same
+    # reason the anti-invention rules are.
+    "Never steer a conversation back to the car",
+    "It is not a limit on what you know",
 ]
 
 HOSTILE = [
@@ -68,6 +74,31 @@ for pid in known():
     prompt = build_system_prompt("pl", pid)
     for phrase in INVARIANTS:
         check(f"{pid}: keeps “{phrase[:34]}…”", phrase in prompt)
+
+# --- an assistant that is not only about the car -----------------------------
+#
+# The complaint that produced the reframing: the owner could not have an
+# ordinary conversation, because every opening turned back into the car. It is
+# asserted here rather than left to be noticed because it fails the way the old
+# framing failed — silently, in a conversation, and only obvious to the person
+# having it.
+base = build_system_prompt("pl")
+check("chat about anything is a first-class use", "Ordinary conversation is a first-class use" in base)
+check("nothing is steered back to the car", "Never steer a conversation back to the car" in base)
+check(
+    "no tool fires when the car was not the subject",
+    "call no tool at all when nothing about the car was asked" in base,
+)
+check("the car is still worked by tools, not described", "that is what the tools are for" in base)
+
+# The tension that reframing had to resolve, and the one place it could be lost
+# by tidying: "never fill such gaps from general knowledge" was written about a
+# charger's invented power (see BASE_SYSTEM_PROMPT), and read flat it also
+# forbids answering a question about cooking. Either both sentences are there
+# or the prompt says something nobody meant.
+check("gaps in what a tool returned are still not filled in", "Never fill such gaps from general knowledge" in base)
+check("the no-invention rule says what it is about", "That rule covers what the tools report" in base)
+check("knowing things is not itself forbidden", "It is not a limit on what you know" in base)
 
 check("every built-in id resolves", all(resolve(p) == PERSONAS[p] for p in known()))
 check("standard adds nothing", resolve("standard") == "")
@@ -212,6 +243,14 @@ check("live keeps its own brief", "speaking out loud to someone driving" in spok
 check(
     "live keeps the confirmation rule",
     "has to be confirmed in the app" in spoken,
+)
+# Who the assistant is lives in build_system_prompt and is inherited, never
+# restated: a second wording here is what would let the spoken assistant go on
+# steering every conversation back to the car after the typed one stopped.
+check("live inherits the general framing", "Ordinary conversation is a first-class use" in spoken)
+check(
+    "live answers what is not about the car as itself",
+    "needs no tool and no mention of the car" in spoken,
 )
 check(
     "live contains a hostile style note",

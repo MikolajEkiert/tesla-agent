@@ -22,6 +22,7 @@ import {
   fetchVehicleState,
   lock,
   NotUnlockedError,
+  PendingTurnLostError,
   sendMessage,
   transcribe,
   confirmByVoice,
@@ -777,7 +778,27 @@ export function ChatScreen({
       if (conversationTurn) enterPhase("thinking");
       try {
         const { persona: personaId, personaStyle } = personaFields(persona, customPersonas);
-        const res = await sendMessage(text, history, language, personaId, personaStyle);
+        const res = await sendMessage(text, history, language, personaId, personaStyle, {
+          // The car was asleep, so this turn is going to take the ten to twenty
+          // seconds a wake takes. Say so as an ordinary assistant line and
+          // leave `pending` set, so the typing dots stay under it: the sentence
+          // says an answer is coming and the dots say it is still being worked
+          // on, which together are what the driver was missing.
+          //
+          // Deliberately not spoken, in a conversation or out of it. A spoken
+          // reply's onEnd is what hands the turn back to the microphone
+          // (listenAgain below), so reading this out would end the turn and ask
+          // the driver to talk again while the car was still coming online —
+          // and the answer they were waiting for would land in the middle of
+          // the next question.
+          onInterim: (interim) => {
+            if (chatIdRef.current !== askedIn) return;
+            setItems((prev) => [
+              ...prev,
+              { kind: "message", id: id(), role: "assistant", text: interim },
+            ]);
+          },
+        });
         // The conversation moved on while this was in flight. The answer
         // belongs to a chat nobody is looking at, and putting it anywhere else
         // would be a lie about who said what.
@@ -891,7 +912,19 @@ export function ChatScreen({
           // that caused it, and that question is no longer on screen. Retrying
           // it into a different conversation is the last thing anyone wants.
         } else {
-          setError(e instanceof BackendError ? e.message : t("errorUnreachable"));
+          // A turn that went away while we were waiting for the car to wake has
+          // no server message to relay — it is the absence of one. Naming it
+          // separately keeps it out of "is the backend even running?", which it
+          // plainly is, and it must produce a sentence rather than nothing:
+          // leaving the driver on the typing dots is the bug this whole path
+          // was built to remove.
+          setError(
+            e instanceof PendingTurnLostError
+              ? t("errorWakeLost")
+              : e instanceof BackendError
+              ? e.message
+              : t("errorUnreachable")
+          );
           // Keep the question, so the error bar can offer to ask it again. A
           // rate limit or a dropped signal is the ordinary case here, and
           // retyping a sentence you already said is a poor answer to it.
@@ -1289,7 +1322,31 @@ export function ChatScreen({
         // ordinary thing the driver said.
       }
 
-      const text = (await transcribe(blob, language)).trim();
+      const heard = await transcribe(blob, language);
+      const text = heard.text.trim();
+      if (heard.outcome === "unclear") {
+        // Words arrived and did not come through whole — cut off, or nothing
+        // but hesitation (voice.clarity, backend/app/voice.py). Saying so is
+        // the entire point of that check: the alternative is what used to
+        // happen, which is half a sentence posted to /chat, where it reads as
+        // a request one guess short of complete. Climate is ungated on
+        // purpose, so that guess reaches the car without anyone tapping.
+        //
+        // Counted against the same budget as a silent turn rather than reset
+        // like a good one. Asking again is right once; a run of turns nothing
+        // can be made of is a cabin or a microphone, and repeating the request
+        // into it is how a conversation loops instead of ending.
+        emptyTurnsRef.current += 1;
+        appendItems([
+          { kind: "message", id: id(), role: "assistant", text: t("voiceUnclear") },
+        ]);
+        if (emptyTurnsRef.current >= CONVERSATION_MAX_EMPTY_TURNS) {
+          stopConversation();
+          return;
+        }
+        speakThen(t("voiceUnclear"));
+        return;
+      }
       if (!text) {
         // The recording had speech-shaped audio in it but the transcriber
         // returned nothing — either it genuinely heard no words, or the

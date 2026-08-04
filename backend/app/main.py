@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 
-from app import actions, confirm_phrase, live, scheduler, tools, tts, voice
+from app import actions, confirm_phrase, live, scheduler, tools, tts, turns, voice
 from app.auth import gate, passkey
 from app.config import get_settings
 from app.llm import build_orchestrator
@@ -371,6 +371,16 @@ class ChatResponse(BaseModel):
     reply: str
     history: list[dict[str, Any]]
     tool_trace: list[dict[str, Any]]
+    # Set only when this turn ran into a sleeping car and was handed off to
+    # finish in the background (app/turns.py). Then `reply` is the interim
+    # sentence, `history` is what the caller sent back unchanged, `tool_trace`
+    # is empty, and the real turn — reply, history and every tool call it made,
+    # confirmation tokens included — arrives from GET /chat/pending/{id}.
+    #
+    # Null on every ordinary turn, which is also what a client built before this
+    # existed reads it as. That client shows the interim sentence and stops,
+    # which is a worse answer than it could have had and a truthful one.
+    pending_id: str | None = None
 
 
 @app.get("/health")
@@ -384,9 +394,24 @@ async def health() -> dict[str, str]:
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
+    """One conversation turn — and, when the car has to be woken first, the
+    front half of one.
+
+    turns.run watches the turn it is given and returns the moment either the
+    turn finishes or the adapter reports a wake genuinely under way. Everything
+    about the first case is unchanged, exception handling included; the second
+    hands back a sentence and an id and leaves the turn running. See
+    app/turns.py for why that split is drawn at an observed wake and nowhere
+    else.
+    """
     try:
-        result = await orchestrator.chat(
-            req.message, req.history, req.language, req.persona, await _persona_style(req)
+        result = await turns.run(
+            adapter,
+            orchestrator.chat(
+                req.message, req.history, req.language, req.persona, await _persona_style(req)
+            ),
+            req.language,
+            req.history,
         )
     except Exception as e:
         # Without this, any downstream failure (LLM rate limit, LLM outage,
@@ -398,6 +423,27 @@ async def chat(req: ChatRequest) -> ChatResponse:
     return ChatResponse(**result)
 
 
+@app.get("/chat/pending/{pending_id}")
+async def chat_pending(pending_id: str) -> dict[str, Any]:
+    """Collect the answer to a turn that had to wait for the car to wake.
+
+    Behind the session gate like /chat itself — it is the same turn, and its
+    tool_trace carries the same confirmation tokens, so it needs the same
+    authentication. Deliberately absent from TOKEN_ROUTES: the Shortcut has
+    nowhere to poll (see /voice/ask), so a token that could reach this would be
+    a token that could reach a confirmation token, for nothing.
+
+    Rides on the existing `handle /chat*` block in deploy/Caddyfile — that
+    pattern is a prefix match, so /chat/pending/… is already routed to the API.
+    Checked by deploy/check-routes.py rather than assumed.
+
+    Every outcome is a 200, including an id this server has never heard of;
+    see turns.collect for why an error status would be the wrong answer to
+    "is it ready yet".
+    """
+    return turns.collect(pending_id)
+
+
 @app.post("/voice/transcribe")
 async def voice_transcribe(
     request: Request,
@@ -407,7 +453,7 @@ async def voice_transcribe(
     # and it is what stops this call rewriting a correctly-heard "Orlen" into
     # the nearest word from the car's vocabulary.
     draft: str | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Audio in, text out. Nothing else.
 
     The transcript goes back to the app, which sends it through /chat like any
@@ -418,6 +464,12 @@ async def voice_transcribe(
     Takes the raw recording as the request body rather than multipart form
     data: the client posts one blob with one content type, which needs no
     parser dependency and lets the size be checked before anything is read.
+
+    A transcript that did not arrive whole is answered as an outcome rather
+    than an error, in the same vocabulary /actions/confirm/voice already uses:
+    both routes are asking "is this usable", both answer "no, and here is which
+    kind of no", and the client's response to either is a sentence, never a
+    failed request. See voice.clarity for what counts.
     """
     declared = request.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > voice.MAX_AUDIO_BYTES:
@@ -432,7 +484,18 @@ async def voice_transcribe(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
-    return {"text": text}
+
+    outcome = voice.clarity(text)
+    if outcome == "ok":
+        return {"text": text, "ok": True}
+    # The text is dropped rather than relayed with a flag beside it, and that
+    # is the backwards-compatible half: a client that reads `text` and ignores
+    # everything else — the build already installed on a phone when this ships,
+    # since the PWA updates on its own schedule (mobile/src/update.ts) — sees an
+    # empty transcript and does what it has always done with one, which is say
+    # nothing was heard. The failure to avoid is the old client posting half a
+    # sentence to /chat because the field it reads still looked like an answer.
+    return {"text": "", "ok": False, "outcome": outcome}
 
 
 class VoiceSpeakRequest(BaseModel):
@@ -686,6 +749,13 @@ async def voice_ask(req: VoiceAskRequest) -> dict[str, str]:
     so a command that needs confirming ends as "confirm it in the app" and
     stops there. This is the only route the bearer token can reach; see
     TOKEN_ROUTES above.
+
+    Calls the orchestrator directly and blocks, where /chat now hands a turn
+    that hits a sleeping car off to the background (app/turns.py). Same reason
+    this route is single-turn in the first place: a Shortcut speaks one string
+    and exits. It cannot poll, and it has nowhere to put a second answer — so
+    an interim sentence here would be the *only* thing Siri ever said, which is
+    strictly worse than waiting out the wake.
     """
     text = req.text.strip()[:MAX_ASK_CHARS]
     if not text:

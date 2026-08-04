@@ -84,11 +84,27 @@ SESSION_LIFETIME_MIN = 15
 # rest — read state before answering, never invent a figure a tool did not
 # return — is the same prompt the typed assistant runs on, deliberately: two
 # conversations, one set of rules about what may be said.
+#
+# "The rest" includes who the assistant is. Identity and scope stay in
+# build_system_prompt and are inherited here rather than restated, because a
+# second wording is a second thing to keep in step: when the framing was
+# widened from "in-car voice assistant" to a general assistant that also
+# drives a car, a copy here would have gone on steering every spoken
+# conversation back to the car long after the typed one stopped.
 SPOKEN_INSTRUCTION = (
-    " You are speaking out loud to someone driving. One or two short sentences, "
-    "no lists, no markdown, no emoji, no spelling things out. "
+    " You are speaking out loud to someone driving. Usually one or two short "
+    "sentences, no lists, no markdown, no emoji, no spelling things out — "
+    "though something that genuinely takes explaining gets the few sentences "
+    "it takes, said the way you would say it to a passenger. "
     "Call a tool whenever the answer depends on the car — never answer from "
     "memory of an earlier turn if the value could have changed. "
+    # The other direction, and the one the owner actually complained about: the
+    # pull towards the car is strongest here, because this session is listening
+    # from inside the cabin. A conversation about dinner is a conversation
+    # about dinner. Typed and spoken have to answer it the same way, or the
+    # assistant is two different assistants depending on which one he used.
+    "A question that has nothing to do with the car needs no tool and no "
+    "mention of the car — answer it as the conversation it is. "
     # The same priming that measurably fixed the transcription path, given to
     # the model that now does the listening itself. A general speech model gets
     # these words wrong because in ordinary Polish they are rare and their
@@ -112,6 +128,20 @@ SPOKEN_INSTRUCTION = (
     "or a percentage — ask a one-line question instead of acting on a guess. "
     "Never answer a question you only half heard: say what you thought you "
     "heard and let the driver correct you. "
+    # The sentence above covers a word this session is unsure it heard. The one
+    # below covers a sentence that stopped, which is the other half of what the
+    # owner complained about ("jest ucieta") and the half this path has no net
+    # under. The recorded path gets voice.clarity() over its transcript before
+    # anything is sent; here there is no transcript to check — this model does
+    # its own listening, and what it heard never leaves it. The rule in
+    # build_system_prompt above reaches this session too, since the whole
+    # prompt is inherited rather than restated; what is added here is the thing
+    # only a live listener meets, which is the driver breaking off mid-word
+    # because someone cut them up or the road got loud.
+    "A sentence that stops before its point is not a short sentence. When the "
+    "driver breaks off — trails away, gets drowned out, stops on 'do', 'na', "
+    "'to the' — wait a beat, and if nothing follows, ask for the missing piece "
+    "in a few words rather than finishing it for them. "
     "Some commands you are not allowed to execute: the tool will answer that a "
     "confirmation is required. When it does, say in one short sentence what is "
     "waiting and that it has to be confirmed in the app, then stop. Do not call "

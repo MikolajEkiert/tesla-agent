@@ -22,6 +22,13 @@ const STRINGS = {
     disconnectCancel: "Cancel",
     disconnectConfirm: "Disconnect",
     errorUnreachable: "Couldn't reach Amp's backend. Is it running?",
+    // Shown when a turn that was waiting for the car to wake never came back —
+    // the poll gave up, or the answer expired before the app returned to it.
+    // It has to be a sentence and not a spinner: sitting on "Myślę…" forever is
+    // the exact complaint the two-phase reply was built to answer, and losing
+    // the answer is not a reason to reproduce it. errorRetry below is already
+    // wired to ask the question again, which is the only useful move left.
+    errorWakeLost: "The car took too long to answer. Ask again?",
     errorRetry: "Try again",
     errorDismiss: "Dismiss",
     sendMessage: "Send",
@@ -29,12 +36,15 @@ const STRINGS = {
     resendMessage: "Ask again",
     chatRename: "Rename",
     confirmEyebrow: "Needs your go-ahead",
-    // The four things people actually ask a car in a car park, phrased exactly
-    // as they are sent — tapping one teaches you what you could have said.
+    // The things people actually ask a car in a car park, phrased exactly as
+    // they are sent — tapping one teaches you what you could have said. The
+    // last two are not about the car on purpose: see SuggestionChips.tsx.
     chipWarm: "Warm the car to 21°C",
     chipRange: "How much range do I have?",
     chipCharger: "Nearest Supercharger",
     chipLock: "Lock the car",
+    chipDinner: "What should I make for dinner?",
+    chipJoke: "Tell me a joke",
     chatDeleteTitle: "Delete this chat?",
     chatDeleteBody: "The conversation is removed from this device for good.",
     chatDeleteConfirm: "Delete",
@@ -109,6 +119,12 @@ const STRINGS = {
     voiceTranscribing: "Transcribing…",
     voiceTooShort: "Too short — hold the button while you speak",
     voiceSilence: "Didn't catch anything",
+    // Separate from voiceSilence because the two are different events and the
+    // driver can tell them apart: nothing was said, versus something was said
+    // and arrived in pieces. Phrased as a request rather than a report — the
+    // only useful thing to do about it is say it again, and in a car that
+    // sentence has to carry the instruction, not just the diagnosis.
+    voiceUnclear: "Didn't quite catch that — say it again?",
     voiceDenied: "Microphone access denied",
     voiceFailed: "Couldn't transcribe that",
     // Names the microphone rather than the transcriber, and carries the
@@ -218,6 +234,7 @@ const STRINGS = {
     disconnectCancel: "Anuluj",
     disconnectConfirm: "Odłącz",
     errorUnreachable: "Nie można połączyć się z backendem Amp. Czy jest uruchomiony?",
+    errorWakeLost: "Auto odpowiadało zbyt długo. Zapytać jeszcze raz?",
     errorRetry: "Ponów",
     errorDismiss: "Zamknij",
     sendMessage: "Wyślij",
@@ -229,6 +246,8 @@ const STRINGS = {
     chipRange: "Ile mam zasięgu?",
     chipCharger: "Najbliższy Supercharger",
     chipLock: "Zablokuj auto",
+    chipDinner: "Co zrobić na obiad?",
+    chipJoke: "Opowiedz mi kawał",
     chatDeleteTitle: "Usunąć ten czat?",
     chatDeleteBody: "Rozmowa zniknie z tego urządzenia na dobre.",
     chatDeleteConfirm: "Usuń",
@@ -303,6 +322,7 @@ const STRINGS = {
     voiceTranscribing: "Rozpoznaję…",
     voiceTooShort: "Za krótko — przytrzymaj przycisk podczas mówienia",
     voiceSilence: "Nic nie usłyszałem",
+    voiceUnclear: "Nie dosłyszałem — powtórz, proszę",
     voiceDenied: "Brak dostępu do mikrofonu",
     voiceFailed: "Nie udało się rozpoznać mowy",
     voiceMicFailed: "Nie udało się uruchomić mikrofonu ({reason})",

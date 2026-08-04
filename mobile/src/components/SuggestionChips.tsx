@@ -13,18 +13,25 @@ import type { TranslationKey } from "../i18n";
 import { color, motion, radius, space, type } from "../theme";
 
 /**
- * Four things worth asking, on an empty chat.
+ * Six things worth asking, on an empty chat.
  *
- * Not a menu of features — the assistant takes anything you can say. These are
- * the four that get asked in a car park in the rain, when typing is the last
- * thing anyone wants to do, and each one sends exactly the sentence it shows,
- * so tapping teaches you what you could have said.
+ * Not a menu of features — the assistant takes anything you can say. Four are
+ * the ones that get asked in a car park in the rain, when typing is the last
+ * thing anyone wants to do. The other two are here because an empty chat
+ * offering nothing but vehicle commands answers "what is this for?" on its
+ * own, and answers it wrongly: the owner's complaint was that he could never
+ * just talk to the assistant, and a first screen made of four car commands
+ * teaches exactly that. Each chip sends exactly the sentence it shows, so
+ * tapping teaches you what you could have said — which is why two of them say
+ * something that has nothing to do with the car.
  */
 const SUGGESTIONS: TranslationKey[] = [
   "chipWarm",
   "chipRange",
+  "chipDinner",
   "chipCharger",
   "chipLock",
+  "chipJoke",
 ];
 
 /** Each chip arrives just after the one before it. Short enough that the row

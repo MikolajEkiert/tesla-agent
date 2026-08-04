@@ -186,6 +186,17 @@ class FleetImpl:
         self._last_state: dict[str, Any] | None = None
         self._last_state_at: float | None = None
         self._last_awake_at: float | None = None
+        # Set only for the duration of a _wake_and_wait. Read from outside by
+        # waking_since() below, which is what lets /chat answer "it's waking"
+        # while this is still in progress rather than after it.
+        self._waking_since: float | None = None
+
+    def waking_since(self) -> float | None:
+        """See TeslaAdapter.waking_since. The value is whatever
+        _wake_and_wait is currently holding — it is the only place in this
+        file that blocks on a sleeping car, and therefore the only place the
+        ten-to-twenty seconds actually come from."""
+        return self._waking_since
 
     async def _access_token(self) -> str:
         return await self.tokens.get_access_token()
@@ -374,23 +385,32 @@ class FleetImpl:
     async def _wake_and_wait(self) -> None:
         """POST wake_up, then poll vehicle_data until it stops 408ing (the
         car's back online) or we give up. Only ever called from the command
-        path — reads never wake the car."""
-        await self._wake_request()
-        deadline = time.monotonic() + WAKE_TIMEOUT_S
-        nudged = False
-        while time.monotonic() < deadline:
-            try:
-                data = await self._fetch_vehicle_data()
-            except VehicleAsleepError:
-                # Halfway through with no luck yet — the first wake_up may
-                # not have reached the car (weak signal, etc). Nudge once.
-                if not nudged and time.monotonic() > deadline - WAKE_TIMEOUT_S / 2:
-                    nudged = True
-                    await self._wake_request()
-                await asyncio.sleep(WAKE_POLL_INTERVAL_S)
-                continue
-            self._remember(self._normalize(data))
-            return
+        path — reads never wake the car.
+
+        The whole of this method is bracketed by _waking_since so a turn
+        waiting on it can say so while it waits. Cleared in `finally`, not on
+        the success path: a wake that timed out has stopped waking, and leaving
+        the marker set would make the next turn claim a wake nobody started."""
+        self._waking_since = time.monotonic()
+        try:
+            await self._wake_request()
+            deadline = time.monotonic() + WAKE_TIMEOUT_S
+            nudged = False
+            while time.monotonic() < deadline:
+                try:
+                    data = await self._fetch_vehicle_data()
+                except VehicleAsleepError:
+                    # Halfway through with no luck yet — the first wake_up may
+                    # not have reached the car (weak signal, etc). Nudge once.
+                    if not nudged and time.monotonic() > deadline - WAKE_TIMEOUT_S / 2:
+                        nudged = True
+                        await self._wake_request()
+                    await asyncio.sleep(WAKE_POLL_INTERVAL_S)
+                    continue
+                self._remember(self._normalize(data))
+                return
+        finally:
+            self._waking_since = None
         raise RuntimeError(
             "Couldn't wake the car in time — check it has signal and the "
             "12V battery isn't flat, then try again."

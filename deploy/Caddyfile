@@ -25,6 +25,13 @@ tesla-amp.duckdns.org {
 	handle /actions/* {
 		reverse_proxy api:8000
 	}
+	# The trailing * is load-bearing, not decoration: /chat/pending/{id} is how
+	# the app collects a turn that had to wait for the car to wake (see
+	# backend/app/turns.py), and it is routed here only because this pattern is
+	# a prefix match. Narrowed to a bare /chat, the poll falls through to the
+	# catch-all below and every reply that woke the car is answered by nginx's
+	# 404 — the app would show the "waking it now" line and then nothing, which
+	# is a worse version of the silence this was built to remove.
 	handle /chat* {
 		reverse_proxy api:8000
 	}

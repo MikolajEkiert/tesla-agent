@@ -288,6 +288,143 @@ def _looks_like_speech(text: str) -> bool:
     return any(ch.isalpha() for ch in stripped)
 
 
+# --- Is this transcript a request at all? -----------------------------------
+#
+# The owner's complaint, verbatim: "gdy czat nie jest pewny odpowiedzi (nie jest
+# zrozumiala, duzo szumu, jest ucieta) powinien poprosić o powtórzenie". Three
+# separate things, and the third is the one that costs something: an utterance
+# that got cut off still *parses*. "Ustaw temperaturę na" reads as a complete
+# instruction missing only a number, and a model handed a nearly-complete
+# instruction supplies the missing part — the same pull documented at _PROMPT
+# above, one layer later. Silence and stage directions were already caught
+# (_looks_like_speech, the NO_SPEECH sentinel); a half sentence was not, and it
+# went to /chat as the driver's own words. Climate is deliberately ungated, so
+# a guessed number is applied to the car without anyone tapping anything.
+#
+# The trade is asymmetric and the thresholds below are set by it: a wrong
+# "say that again" costs one repeated sentence, a wrong "understood" costs a
+# command nobody gave. But eagerness has its own cost — short is not unclear.
+# "stop", "otwórz", "zimno", "lock", "cieplej" are whole commands, and a rule
+# that rejected them would make the feature the thing being complained about.
+# So nothing here keys on length in words; every signal is something observable
+# about the text itself.
+#
+# Both languages, always, and for the same reason confirm_phrase.py accepts
+# both: the app's language setting says what to reply in, not what the driver
+# will say.
+
+# Hesitation noises. The transcriber is asked to drop these (see _PROMPT) and
+# mostly does; the ones that survive came through because there was little else
+# in the audio, which is exactly what makes them evidence rather than litter.
+_FILLERS = {
+    "yyy", "yy", "y", "eee", "ee", "e", "aaa", "mmm", "hmm", "hm", "mhm",
+    "yhy", "um", "uhm", "uh", "er", "erm", "ehm", "eh", "ah", "aha",
+}
+
+# Words that cannot be the last word of a finished sentence in either language:
+# conjunctions, determiners, and prepositions that must govern something. A
+# transcript ending on one of these is a recording that stopped early — the
+# "ucięta" case, named by the one part of it a string can actually show.
+#
+# Two obvious entries are deliberately absent. Polish "do" and "to" end the
+# highest-stakes cut there is ("zawieź mnie do…", cut before the destination),
+# but they are also ordinary final words in English: "what can you do", "nie
+# wiem co to". A general assistant gets asked "what can you do" as a matter of
+# course, and rejecting it every single time is a visible, repeatable fault,
+# where a cut-off destination is an occasional one that the model's own rule in
+# llm/prompt.py catches by asking where. Where the two languages disagree, this
+# check yields to the prompt rather than guessing which language it is holding.
+#
+# English particles are absent for the same reason from the other direction:
+# "turn it on", "turn it up", "wake it up" are complete imperatives that end on
+# a word Polish would only ever use to govern a noun.
+_DANGLING = {
+    # Polish
+    "i", "a", "oraz", "albo", "lub", "ale", "że", "bo", "aby", "żeby", "czy",
+    "niż", "w", "we", "z", "ze", "o", "u", "na", "od", "po", "za", "przy",
+    "pod", "nad", "przez", "dla", "bez", "około", "między",
+    # English
+    "and", "or", "but", "the", "an", "my", "your", "our", "their",
+    "into", "onto", "than", "because", "although",
+}
+
+# Two letters is a word ("ok", "hi", "no"); one is what a transcriber writes
+# when it heard a sound and had to write something.
+_MIN_REQUEST_LETTERS = 2
+
+_VOWELS = "aeiouyąęó"
+
+_BRACKETED = re.compile(r"[\[\(<][^\]\)>]*[\]\)>]")
+
+# What the model writes when speech trails off rather than stops. A single full
+# stop is ordinary punctuation and is not in here.
+_TRUNCATION_MARKS = ("-", "–", "—", "…", "..")
+
+
+def _words(text: str) -> list[str]:
+    return [w for w in (t.strip("\"'«»„”…,.!?;:-–—()[]<>") for t in text.split()) if w]
+
+
+def clarity(transcript: str) -> str:
+    """'ok', 'no_speech' or 'unclear'.
+
+    'no_speech' means nobody said anything — silence, or the artefacts a
+    transcriber emits instead of admitting it. 'unclear' means somebody did and
+    it did not come through whole, which is the one worth interrupting for:
+    the caller should ask for it again rather than send it to /chat.
+
+    A pure function over a string, deliberately: it is checked by
+    dev/check_unclear_speech.py against transcripts that were actually
+    measured, and a check that needed audio or a model would stop being run.
+    It also overlaps transcribe() on purpose — that path already turns the
+    sentinel and a bracketed-only answer into "", so those branches are
+    unreachable through it, and they are still the first thing a raw transcript
+    from anywhere else hits.
+    """
+    text = (transcript or "").strip()
+    if not text:
+        return "no_speech"
+    # Matched loosely, like transcribe() does, because models add a full stop
+    # and quotation marks to a sentinel they were told to emit verbatim.
+    if NO_SPEECH.strip("[]").lower() in text.lower():
+        return "no_speech"
+    if not _looks_like_speech(text):
+        return "no_speech"
+
+    # A stage direction alongside words is not the same as one instead of them:
+    # "[Muzyka] ustaw 21 stopni" is a command with the radio on. Dropping the
+    # brackets and judging what is left keeps both cases right.
+    body = _BRACKETED.sub(" ", text).strip()
+    if not any(ch.isalpha() for ch in body):
+        return "no_speech"
+
+    trailing = body.rstrip("\"'»”)]")
+    words = [w for w in _words(body) if w.lower() not in _FILLERS]
+    if not words:
+        # Nothing but hesitation. Somebody made a sound, so this is worth
+        # answering rather than passing over in silence.
+        return "unclear"
+    if sum(ch.isalpha() for w in words for ch in w) < _MIN_REQUEST_LETTERS:
+        return "unclear"
+    if trailing.endswith(_TRUNCATION_MARKS):
+        return "unclear"
+
+    raw_last = words[-1]
+    last = raw_last.lower()
+    if last in _DANGLING:
+        return "unclear"
+    # A word chopped mid-way usually still has a vowel in it and is invisible
+    # here — "bagaż" is a real word and the tail of "bagażnik" both. What is
+    # visible is the fragment with no vowel at all, which no word of this
+    # length is in either language. Tested on the word as written, not on the
+    # lower-cased copy: SMS, PLN and GPS have no vowels either, and reading the
+    # case is the only thing that tells an acronym from a fragment.
+    if len(last) >= 3 and raw_last.isalpha() and raw_last.islower():
+        if not any(v in last for v in _VOWELS):
+            return "unclear"
+    return "ok"
+
+
 def _model() -> str:
     """Falls back to the chat model, which is known-good in this deployment.
 

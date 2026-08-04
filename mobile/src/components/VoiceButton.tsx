@@ -60,12 +60,19 @@ export function VoiceButton({
     setPhase("transcribing");
     setLevel(0);
     try {
-      const text = (await transcribe(await recorder.stop(), language)).trim();
+      const heard = await transcribe(await recorder.stop(), language);
+      const text = heard.text.trim();
       if (text) {
         onStatus(null);
         onTranscript(text);
       } else {
-        onStatus(t("voiceSilence"));
+        // Two different nothings, and they want different sentences: silence
+        // is a report, a recording that arrived in pieces is a request to say
+        // it again. Handled here as well as in ChatScreen's conversation loop
+        // because both go through /voice/transcribe — a fix that landed in one
+        // and not the other is exactly how the two capture paths drifted
+        // before (see openMicrophone in voice/recorder.ts).
+        onStatus(heard.outcome === "unclear" ? t("voiceUnclear") : t("voiceSilence"));
       }
     } catch (e) {
       if (e instanceof NothingRecordedError) {

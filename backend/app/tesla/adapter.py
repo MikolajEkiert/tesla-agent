@@ -39,6 +39,31 @@ class TeslaAdapter(ABC):
         stack trace.
         """
 
+    @abstractmethod
+    def waking_since(self) -> float | None:
+        """`time.monotonic()` of the moment a wake-and-wait started, or None
+        when this adapter is not sitting on a sleeping car right now.
+
+        The one thing above this seam that needs to know a wake is *underway*
+        rather than finished. Waking measures 10-20 seconds on the real car and
+        the app had nothing to show for it but "Myślę…", so /chat now answers
+        straight away that the car is coming online and finishes the turn in the
+        background (app/turns.py). That hand-off has to be grounded in a wake
+        that genuinely started: the prompt's own rule is "never say you are
+        waking something unless a tool you actually called did it", and a
+        sentence minted because the car *might* be asleep breaks it exactly as
+        thoroughly as one the model invented.
+
+        Deliberately not a coroutine, unlike everything else here: it reads a
+        field, it is polled a few times a second while a turn runs, and awaiting
+        it would only add scheduler hops to a question with no I/O in it.
+
+        Abstract rather than defaulted to None on purpose. A new implementation
+        that wakes cars but forgets this would simply stop producing the interim
+        reply — no error, no failing probe, just the fifteen seconds of silence
+        this exists to remove, back again and attributable to nothing.
+        """
+
     # --- climate ---
     @abstractmethod
     async def set_temperature(self, celsius: float) -> dict[str, Any]: ...

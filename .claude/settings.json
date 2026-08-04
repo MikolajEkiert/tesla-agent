@@ -1,0 +1,45 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "statusMessage": "Re-running the confirm-phrase adversarial cases...",
+            "timeout": 120,
+            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath // empty'); case \"$f\" in *backend/app/confirm_phrase.py|*backend/app/actions.py) R=\"${CLAUDE_PROJECT_DIR:-/Users/mikolajekiert/Desktop/tesla-agent}\"; out=$(cd \"$R/backend\" && ./.venv/bin/python dev/check_confirm_phrase.py 2>&1 && TESLA_ADAPTER=mock ./.venv/bin/python dev/check_voice_confirm.py 2>&1) || { printf '%s\\n' \"$out\" >&2; exit 2; };; esac"
+          },
+          {
+            "type": "command",
+            "statusMessage": "Checking every route has a Caddyfile handle block...",
+            "timeout": 120,
+            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath // empty'); case \"$f\" in *backend/app/main.py) R=\"${CLAUDE_PROJECT_DIR:-/Users/mikolajekiert/Desktop/tesla-agent}\"; out=$(\"$R/backend/.venv/bin/python\" \"$R/deploy/check-routes.py\" 2>&1) || { printf '%s\\n' \"$out\" >&2; exit 2; };; esac"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 15,
+            "command": "osascript -e 'display notification \"A subagent finished — its change is in the working tree\" with title \"tesla-agent\" subtitle \"Subagent done\" sound name \"Glass\"' >/dev/null 2>&1; echo '{\"suppressOutput\": true}'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 15,
+            "command": "osascript -e 'display notification \"Claude Code finished\" with title \"tesla-agent\" sound name \"Glass\"' >/dev/null 2>&1; echo '{\"suppressOutput\": true}'"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -2,7 +2,21 @@
 account, no signing proxy, and no risk of waking a real vehicle."""
 from __future__ import annotations
 
+import asyncio
+import os
+import time
 from typing import Any
+
+# How long a simulated wake takes, in seconds. Zero — the default, and what
+# every existing probe and `npm run api` gets — means the car is simply always
+# awake, exactly as this file behaved before two-phase replies existed.
+#
+# It exists because the thing being developed against is a *delay*: /chat hands
+# a turn off to the background when a wake starts (app/turns.py), and against a
+# car that is never asleep there is nothing to hand off and no way to see the
+# feature work at all. Set AMP_MOCK_WAKE_S=15 with `npm run api` to get the real
+# car's measured ten-to-twenty seconds on the desk.
+MOCK_WAKE_S = float(os.getenv("AMP_MOCK_WAKE_S", "0") or 0)
 
 
 class MockImpl:
@@ -31,14 +45,56 @@ class MockImpl:
             "charge_port_open": False,
             "software_version": "2026.14.3 mock",
         }
+        self._wake_seconds = MOCK_WAKE_S
+        self._waking_since: float | None = None
+        if self._wake_seconds > 0:
+            self.sleep_now()
+
+    # --- the sleeping-car simulation -----------------------------------------
+    #
+    # Deliberately confined to get_state() and wake(). On a real car every
+    # command wakes too (FleetImpl._command), but the delay the owner
+    # complained about reaches the app through the read path: a question gets
+    # answered by tools._read_state, which reads, sees `awake: false` and calls
+    # wake() in the same turn. Faking a per-command wake as well would mean
+    # threading one through forty one-line methods to exercise a hand-off this
+    # path already exercises, and forty places to forget it.
+
+    def sleep_now(self, wake_seconds: float | None = None) -> None:
+        """Park the fake car asleep, as it would be after a few hours idle.
+
+        A method rather than only an env var because a probe needs to put the
+        car back to sleep between cases, and re-importing the module to change
+        an environment variable is not a thing a check script should have to do.
+        """
+        if wake_seconds is not None:
+            self._wake_seconds = wake_seconds
+        self._state["awake"] = False
+        self._state["stale_seconds"] = 3600
+
+    def waking_since(self) -> float | None:
+        """See TeslaAdapter.waking_since."""
+        return self._waking_since
 
     async def get_state(self) -> dict[str, Any]:
         return dict(self._state)
 
     async def wake(self) -> dict[str, Any]:
-        """The mock car is always awake, so this only has to be honest about
-        that — it still reports `woke` so the shape matches the fleet path."""
+        """Wake the car, then report state with `woke` beside it so the shape
+        matches the fleet path.
+
+        Costs real wall-clock time only when the simulation is switched on
+        (AMP_MOCK_WAKE_S above); with it off this is what it always was, an
+        immediate honest "it's awake".
+        """
+        if self._state.get("awake") is not True and self._wake_seconds > 0:
+            self._waking_since = time.monotonic()
+            try:
+                await asyncio.sleep(self._wake_seconds)
+            finally:
+                self._waking_since = None
         self._state["awake"] = True
+        self._state["stale_seconds"] = 0
         return {**dict(self._state), "woke": True}
 
     async def set_temperature(self, celsius: float) -> dict[str, Any]:

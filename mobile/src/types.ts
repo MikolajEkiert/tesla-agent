@@ -59,6 +59,16 @@ export interface ChatResponse {
   reply: string;
   history: Record<string, unknown>[];
   tool_trace: ToolCall[];
+  /**
+   * Set only when the backend found the car asleep and handed the turn off to
+   * finish in the background (backend/app/turns.py). Then `reply` is the
+   * "waking it now" line, `history` is whatever was sent up, `tool_trace` is
+   * empty, and the real turn is collected from /chat/pending/{id}.
+   *
+   * api.ts's sendMessage does that collecting, so nothing above it ever sees a
+   * half-turn — which is why no screen has to know this field exists.
+   */
+  pending_id?: string | null;
 }
 
 /**

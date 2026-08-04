@@ -25,6 +25,11 @@ sys.path.insert(0, ".")
 
 os.environ.setdefault("TESLA_ADAPTER", "mock")
 os.environ.setdefault("GEMINI_API_KEY", "dummy-key-for-the-probe")
+# Set, not setdefault: AMP_MOCK_WAKE_S makes a fresh MockImpl start out asleep
+# (app/tesla/mock.py), which is exactly what the "already awake" case below
+# asserts is not true. Run in the same shell as an `npm run api` that has it
+# switched on, this probe would fail on the environment rather than the code.
+os.environ["AMP_MOCK_WAKE_S"] = "0"
 
 from app import tools  # noqa: E402
 from app.tesla.mock import MockImpl  # noqa: E402

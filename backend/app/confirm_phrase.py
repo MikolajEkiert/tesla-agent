@@ -32,7 +32,7 @@ MAX_UTTERANCE_CHARS = 32
 
 # Taken from the button labels the card already shows (see i18n.ts), so the
 # word you say is the word you can see. Nobody has to learn a magic phrase.
-_CONFIRM = r"(potwierdzam|confirm|confirmed)"
+_CONFIRM = r"(potwierdzam|confirm|confirmed|otwórz)"
 _CANCEL = r"(anuluj|anuluje|anuluję|cancel|nie|no)"
 
 # Leading/trailing punctuation and whitespace only. The model likes to add a
