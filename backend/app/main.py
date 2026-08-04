@@ -18,7 +18,7 @@ from app.auth import gate, passkey
 from app.config import get_settings
 from app.llm import build_orchestrator
 from app.llm import persona
-from app import persona_store
+from app import persona_store, prefs_store
 from app.tesla.adapter import build_adapter
 from app.auth.oauth import disconnect, exchange_code, get_authorize_url, has_tokens
 
@@ -557,9 +557,39 @@ async def live_tool(req: LiveToolRequest) -> dict[str, Any]:
 
 @app.get("/voice/voices")
 async def voice_voices() -> dict[str, Any]:
-    """What the settings screen offers. Served rather than hardcoded in the app
-    so the allow-list has exactly one home — the one the synthesiser checks."""
-    return {"voices": sorted(tts.VOICES), "default": tts.DEFAULT_VOICE}
+    """What the settings screen offers, and which one the owner picked.
+
+    The list is served rather than hardcoded in the app so the allow-list has
+    exactly one home — the one the synthesiser checks. The choice comes with it
+    for the same reason it is kept server-side at all (see app/prefs_store.py):
+    it is the owner's, not this browser's, so the laptop and the phone should
+    not have to be told separately.
+
+    `selected` is null when nobody has chosen yet, which is not the same as the
+    default — it is what tells a device holding a choice from before this
+    existed to hand it over.
+    """
+    return {
+        "voices": sorted(tts.VOICES),
+        "default": tts.DEFAULT_VOICE,
+        "selected": await prefs_store.get_voice(),
+    }
+
+
+class VoiceSelectRequest(BaseModel):
+    voice: str
+
+
+@app.post("/voice/voices/selected")
+async def voice_select(req: VoiceSelectRequest) -> dict[str, Any]:
+    """Remember the voice that was just tapped, for every device the owner
+    uses. Behind the session gate like everything else."""
+    try:
+        return {"selected": await prefs_store.set_voice(req.voice)}
+    except prefs_store.PrefRejected as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.get("/personas")

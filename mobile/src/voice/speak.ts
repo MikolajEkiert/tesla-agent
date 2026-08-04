@@ -23,7 +23,7 @@
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
-import { fetchSpeech } from "../api";
+import { fetchSpeech, fetchVoices, saveVoiceSelection } from "../api";
 import { prepareForPlayback } from "./audioSession";
 import { toPlainText } from "../markdown";
 import type { Language } from "../i18n";
@@ -46,19 +46,73 @@ const VOICE_KEY = "amp.voice";
  */
 export type VoiceChoice = "device" | string;
 
+/** Mirrors DEFAULT_VOICE in backend/app/tts.py, which is the copy that decides.
+ *  Held here for the one moment the server has not answered yet — the first
+ *  render of a cold start with no cache. */
 export const DEFAULT_VOICE: VoiceChoice = "Charon";
 
+/**
+ * Which voice reads the replies, according to the server.
+ *
+ * It is the owner's choice rather than this browser's (see
+ * backend/app/prefs_store.py), so the phone and the laptop answer in the same
+ * voice, and clearing a browser's storage no longer quietly resets it.
+ *
+ * What is kept in AsyncStorage is a cache of that, for one job: choosing a
+ * voice while parked underground, where the settings screen would otherwise
+ * snap back to the default. A device that chose a voice before this was kept
+ * server-side hands its choice over on the way past — once, and only when the
+ * server has none, so a voice changed on the laptop is not undone by the phone
+ * on its next load.
+ */
 export async function loadVoiceChoice(): Promise<VoiceChoice> {
+  const cached = await readCachedVoice();
   try {
-    const stored = await AsyncStorage.getItem(VOICE_KEY);
-    if (stored) return stored;
+    const { selected } = await fetchVoices();
+    if (selected) {
+      await writeCachedVoice(selected);
+      return selected;
+    }
+    if (cached) {
+      // Best-effort: a choice that will not go up is still this device's
+      // choice, and it will be offered again next time.
+      await saveVoiceSelection(cached).catch(() => {});
+      return cached;
+    }
   } catch {
-    // storage unavailable — the default is a fine answer
+    // No signal, or the session has lapsed. What this device last used beats
+    // an assistant that changes voice whenever the network does.
   }
-  return DEFAULT_VOICE;
+  return cached ?? DEFAULT_VOICE;
 }
 
+/**
+ * Remember a voice for the owner, and for this device while it is offline.
+ *
+ * The cache is written first and regardless: the tap has already changed which
+ * voice is speaking, and a failed round trip should not mean the setting is
+ * forgotten by the time the screen is reopened.
+ */
 export async function saveVoiceChoice(voice: VoiceChoice): Promise<void> {
+  await writeCachedVoice(voice);
+  try {
+    await saveVoiceSelection(voice);
+  } catch {
+    // Offline, or a voice this server does not offer. Either way the device
+    // keeps speaking in the one that was tapped.
+  }
+}
+
+async function readCachedVoice(): Promise<VoiceChoice | null> {
+  try {
+    return (await AsyncStorage.getItem(VOICE_KEY)) || null;
+  } catch {
+    // storage unavailable — the server's answer, or the default, is fine
+    return null;
+  }
+}
+
+async function writeCachedVoice(voice: VoiceChoice): Promise<void> {
   try {
     await AsyncStorage.setItem(VOICE_KEY, voice);
   } catch {
@@ -292,12 +346,17 @@ function releaseUrl(): void {
  * forth between two voices should not be a network round trip at all, and in a
  * car the network is the slow part.
  *
- * Bounded and small — twelve is the whole sample matrix, six voices in two
- * languages. Replies are not cached: they are long, said once, and holding
- * their audio would be a memory leak dressed as an optimisation.
+ * Bounded and small. It no longer holds the whole sample matrix — sixty, now
+ * that every Gemini voice is offered — because that would be a couple of
+ * megabytes of audio kept alive for a screen the owner visits twice a year;
+ * the server's own disk cache is what makes the sixty-first tap free. This one
+ * covers the going back and forth between a handful of candidates, which is
+ * how the choice is actually made. Replies are not cached at all: they are
+ * long, said once, and holding their audio would be a memory leak dressed as
+ * an optimisation.
  */
 const CLIP_CACHE_MAX_CHARS = 200;
-const CLIP_CACHE_MAX_ENTRIES = 12;
+const CLIP_CACHE_MAX_ENTRIES = 16;
 const clipCache = new Map<string, Blob>();
 
 function rememberClip(key: string, blob: Blob): void {

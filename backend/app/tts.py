@@ -37,7 +37,7 @@ from app.config import get_settings
 #
 # The settings screen speaks a sample every time a voice is tapped, because a
 # list of names like "Iapetus" and "Umbriel" tells you nothing until you hear
-# it. Six voices in two languages is twelve possible samples, and flicking
+# it. Thirty voices in two languages is sixty possible samples, and flicking
 # through them used to bill Google once per tap, every time, forever.
 #
 # The endpoint already sends `cache-control: private, max-age=300`, which does
@@ -51,9 +51,13 @@ from app.config import get_settings
 # a small disk.
 CACHE_DIR = os.path.join("data", "tts-cache")
 CACHE_MAX_CHARS = 200
-# Twelve samples plus room for whatever else is short and repeated. Small
-# enough that the directory stays a cache rather than becoming an archive.
-CACHE_MAX_FILES = 64
+# Sixty samples plus room for whatever else is short and repeated. Sized to the
+# whole matrix on purpose: at 64 — the number from when there were six voices —
+# hearing every voice once would evict the samples while the owner was still
+# listening to them, and the next tap would pay for one it had already bought.
+# A sample is a few tens of kilobytes, so the whole set is a couple of
+# megabytes on a disk that has room for it.
+CACHE_MAX_FILES = 96
 
 # The reply is a sentence or two by design (see llm/prompt.py). This cap is a
 # backstop against synthesising — and paying for — something pathological. Well
@@ -68,22 +72,62 @@ ENDPOINT = "https://texttospeech.googleapis.com/v1/text:synthesize"
 AUDIO_ENCODING = "MP3"
 MEDIA_TYPE = "audio/mpeg"
 
-# Chosen by ear by the owner — three male, three female. Which one speaks costs
-# the same: the meter runs on characters, not on the voice.
+# Every voice Gemini offers, rather than the six the owner first picked by ear.
+# Which one speaks costs the same — the meter runs on characters, not on the
+# voice — so a shortlist only ever meant the other twenty-four could not be
+# tried without a redeploy.
 #
-# Allow-listed rather than passed through, because the name arrives in a
+# One list for both halves on purpose. These names are Chirp 3: HD's
+# (<locale>-Chirp3-HD-<name>, synthesised below) *and* the Live API's prebuilt
+# voices (app/live.py hands one straight to Gemini), which is what lets the
+# spoken reply and the live conversation sound like the same assistant.
+#
+# Taken from the API rather than the documentation: `GET /v1/voices` on Cloud
+# Text-to-Speech returns exactly these thirty for both pl-PL and en-US, so
+# nothing here is available in one language and missing in the other.
+#
+# Still an allow-list rather than a pass-through, because the name arrives in a
 # request body and ends up in a URL to a paid API. An unknown value falls back
 # to the default instead of travelling onward.
 VOICES = {
-    "Puck",
-    "Rasalgethi",
-    "Zubenelgenubi",
+    "Achernar",
+    "Achird",
+    "Algenib",
+    "Algieba",
+    "Alnilam",
+    "Aoede",
+    "Autonoe",
+    "Callirrhoe",
+    "Charon",
+    "Despina",
+    "Enceladus",
+    "Erinome",
+    "Fenrir",
+    "Gacrux",
+    "Iapetus",
+    "Kore",
+    "Laomedeia",
     "Leda",
+    "Orus",
+    "Puck",
+    "Pulcherrima",
+    "Rasalgethi",
+    "Sadachbia",
+    "Sadaltager",
+    "Schedar",
     "Sulafat",
+    "Umbriel",
     "Vindemiatrix",
+    "Zephyr",
+    "Zubenelgenubi",
 }
 
-DEFAULT_VOICE = "Puck"
+# The app has named this one as its default since the picker was written, while
+# this file said Puck — and because "Charon" was not in the six above, every
+# reply came back in Puck's voice with the picker showing nothing selected. It
+# is a real voice now, so the two halves agree on it rather than on the name
+# that only won by being the fallback.
+DEFAULT_VOICE = "Charon"
 
 # Chirp 3 voices are named <locale>-Chirp3-HD-<voice>, so the locale is part of
 # the identity: the same voice speaks Polish or English depending on it.

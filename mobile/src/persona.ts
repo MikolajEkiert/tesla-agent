@@ -7,13 +7,12 @@
  * format, so they must agree across both halves, while the wording of a style
  * note is a prompt and belongs next to the prompt it joins.
  *
- * The ones the owner writes never leave the device except as the text of a
- * single request. There is no account and no sync here — the server holds no
- * per-user state at all — so a custom persona is stored beside the language
- * and the voice, and travels with each message that uses it. The upshot worth
- * knowing: a persona created on the phone does not exist on the laptop, and
- * selecting one that has been deleted quietly falls back to the standard
- * manner rather than failing (see backend `resolve`).
+ * The ones the owner writes are kept by the server (backend/app/persona_store.py),
+ * beside the voice they chose (backend/app/prefs_store.py) — one list and one
+ * voice for the phone and the laptop both, rather than one per browser. What
+ * this file keeps locally is a cache of that list for when there is no signal.
+ * Selecting a manner that has since been deleted quietly falls back to the
+ * standard one rather than failing (see backend `resolve`).
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {

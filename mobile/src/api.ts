@@ -376,10 +376,35 @@ export async function runLiveTool(
   return res.json();
 }
 
-export async function fetchVoices(): Promise<{ voices: string[]; default: string }> {
+export interface VoiceCatalogue {
+  voices: string[];
+  default: string;
+  /** The voice the owner picked, on whichever device they picked it. Null
+   *  means nobody has chosen one yet — which is not the same as the default,
+   *  and is what lets a device holding its own older choice hand it over. */
+  selected: string | null;
+}
+
+export async function fetchVoices(): Promise<VoiceCatalogue> {
   const res = await fetch(`${DEFAULT_BASE_URL}/voice/voices`, CREDENTIALS);
   await guard(res);
-  return res.json();
+  const body = await res.json();
+  // A server from before the choice was kept for the owner answers without the
+  // field, and `undefined` there would read as "nothing chosen" and start
+  // re-uploading this device's copy on every load.
+  return { ...body, selected: body.selected ?? null };
+}
+
+/** Remember which voice reads the replies, for every device the owner uses. */
+export async function saveVoiceSelection(voice: string): Promise<string> {
+  const res = await fetch(`${DEFAULT_BASE_URL}/voice/voices/selected`, {
+    ...CREDENTIALS,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ voice }),
+  });
+  await guard(res);
+  return (await res.json()).selected;
 }
 
 /**
